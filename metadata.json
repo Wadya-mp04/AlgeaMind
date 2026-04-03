@@ -1,0 +1,5 @@
+{
+  "name": "HydroTwin: Watershed Runoff Simulator",
+  "description": "An interactive digital twin for watershed runoff and contamination risk modeling, integrating environmental drivers and river network simulations.",
+  "requestFramePermissions": ["geolocation"]
+}
