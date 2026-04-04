@@ -47,6 +47,12 @@ class GridEnvironment:
 
     def __init__(self) -> None:
         self.drivers = GlobalDrivers()
+        self.flow_config: Dict[str, bool] = {
+            "inflow_north": True,
+            "inflow_west": True,
+            "inflow_east": True,
+            "outflow_south": True,
+        }
         self.grid: List[List[CellState]] = []
         self._recent_events: List[str] = []
         self._recent_interventions: List[Dict] = []
@@ -115,6 +121,20 @@ class GridEnvironment:
             if hasattr(self.drivers, k):
                 setattr(self.drivers, k, v)
 
+    def update_flow_config(self, **kwargs) -> None:
+        """Enable/disable inflow/outflow channels and apply to the current grid."""
+        for key, value in kwargs.items():
+            if key in self.flow_config and value is not None:
+                self.flow_config[key] = bool(value)
+        self._apply_flow_layout_to_grid()
+        self._log(
+            "Flow topology updated "
+            f"(N:{int(self.flow_config['inflow_north'])} "
+            f"W:{int(self.flow_config['inflow_west'])} "
+            f"E:{int(self.flow_config['inflow_east'])} "
+            f"S-out:{int(self.flow_config['outflow_south'])})."
+        )
+
     def get_state(self) -> Dict[str, Any]:
         """Return full serialisable state snapshot for the API."""
         water_cells = [
@@ -143,6 +163,7 @@ class GridEnvironment:
         return {
             "grid":                  grid_serial,
             "drivers":               self.drivers.to_dict(),
+            "flow_config":           dict(self.flow_config),
             "timestep":              self.drivers.timestep,
             "global_health":         round(global_health, 2),
             "bloom_cells":           bloom_cells,
@@ -203,10 +224,7 @@ class GridEnvironment:
         - OUTFLOW_SOUTH (row 19, cols 11-16) → OUTFLOW
         - All interior cells → WATER with mild eutrophic conditions
         """
-        inflow_n_set = INFLOW_NORTH_SET
-        inflow_w_set = INFLOW_WEST_SET
-        inflow_e_set = INFLOW_EAST_SET
-        outflow_set  = OUTFLOW_SET
+        inflow_n_set, inflow_w_set, inflow_e_set, outflow_set = self._active_flow_sets()
 
         rng = random.Random(42)  # deterministic initial state
         grid: List[List[CellState]] = []
@@ -245,6 +263,31 @@ class GridEnvironment:
                 row.append(cell)
             grid.append(row)
         return grid
+
+    def _active_flow_sets(self):
+        inflow_n_set = INFLOW_NORTH_SET if self.flow_config["inflow_north"] else set()
+        inflow_w_set = INFLOW_WEST_SET if self.flow_config["inflow_west"] else set()
+        inflow_e_set = INFLOW_EAST_SET if self.flow_config["inflow_east"] else set()
+        outflow_set = OUTFLOW_SET if self.flow_config["outflow_south"] else set()
+        return inflow_n_set, inflow_w_set, inflow_e_set, outflow_set
+
+    def _apply_flow_layout_to_grid(self) -> None:
+        """Remap configurable edge channels between land and flow cells."""
+        if not self.grid:
+            return
+        inflow_n_set, inflow_w_set, inflow_e_set, outflow_set = self._active_flow_sets()
+        flow_zone_positions = INFLOW_NORTH_SET | INFLOW_WEST_SET | INFLOW_EAST_SET | OUTFLOW_SET
+
+        for r, c in flow_zone_positions:
+            pos = (r, c)
+            if pos in inflow_e_set:
+                self.grid[r][c] = CellState.make_inflow(industrial_source=True)
+            elif pos in (inflow_n_set | inflow_w_set):
+                self.grid[r][c] = CellState.make_inflow(industrial_source=False)
+            elif pos in outflow_set:
+                self.grid[r][c] = CellState.make_outflow()
+            else:
+                self.grid[r][c] = CellState.make_land()
 
     # ─────────────────────────────────────────────────────────────────────────
     # ACTION DISPATCH
@@ -369,7 +412,7 @@ class GridEnvironment:
     def _random_events(self) -> None:
         """Generate stochastic environmental events each tick."""
         # Industrial spill
-        if random.random() < SPILL_PROB:
+        if self.flow_config["inflow_east"] and random.random() < SPILL_PROB:
             # Pick a random east-inflow cell or interior cell near east edge
             spill_candidates = list(INFLOW_EAST)
             r, c = random.choice(spill_candidates)

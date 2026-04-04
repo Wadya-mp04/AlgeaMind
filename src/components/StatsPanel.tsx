@@ -46,14 +46,14 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ state, healthHistory }) 
       {/* Global health gauge */}
       <div className="bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-3">
         <div className="flex items-center gap-2 mb-1">
-          <Activity size={13} className="text-[#4a9eff]" />
+          <Activity size={15} className="text-[#4a9eff]" />
           <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Ecosystem Health</span>
         </div>
         <div className="flex items-end gap-2 mb-2">
           <span className="text-3xl font-bold" style={{ color: hColor }}>
             {health.toFixed(0)}
           </span>
-          <span className="text-gray-500 text-sm mb-0.5">/ 100</span>
+          <span className="text-gray-500 text-base mb-0.5">/ 100</span>
           <span className="ml-auto text-xs font-semibold" style={{ color: hColor }}>
             {health >= 75 ? "HEALTHY" : health >= 50 ? "WARNING" : health >= 30 ? "CRITICAL" : "COLLAPSE"}
           </span>
@@ -76,49 +76,49 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ state, healthHistory }) 
         <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Key Metrics</div>
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
           <MetricRow
-            icon={<Leaf size={10} className="text-green-400" />}
+            icon={<Leaf size={12} className="text-green-400" />}
             label="Bloom cells"
             value={`${state.bloom_cells} (${bloomPct}%)`}
             warn={state.bloom_cells > 20}
           />
           <MetricRow
-            icon={<Droplets size={10} className="text-blue-400" />}
+            icon={<Droplets size={12} className="text-blue-400" />}
             label="Avg DO"
             value={`${state.avg_do.toFixed(1)}`}
             warn={state.avg_do < 30}
           />
           <MetricRow
-            icon={<AlertTriangle size={10} className="text-orange-400" />}
+            icon={<AlertTriangle size={12} className="text-orange-400" />}
             label="Hypoxic"
             value={`${state.hypoxic_cells} (${hypoxPct}%)`}
             warn={state.hypoxic_cells > 15}
           />
           <MetricRow
-            icon={<Skull size={10} className="text-red-400" />}
+            icon={<Skull size={12} className="text-red-400" />}
             label="Dead zones"
             value={`${state.dead_zone_cells} (${deadPct}%)`}
             warn={state.dead_zone_cells > 0}
           />
           <MetricRow
-            icon={<Zap size={10} className="text-yellow-400" />}
+            icon={<Zap size={12} className="text-yellow-400" />}
             label="Avg N"
             value={state.avg_nitrogen.toFixed(1)}
             warn={state.avg_nitrogen > 45}
           />
           <MetricRow
-            icon={<Zap size={10} className="text-purple-400" />}
+            icon={<Zap size={12} className="text-purple-400" />}
             label="Avg P"
             value={state.avg_phosphorus.toFixed(1)}
             warn={state.avg_phosphorus > 25}
           />
           <MetricRow
-            icon={<Activity size={10} className="text-emerald-400" />}
+            icon={<Activity size={12} className="text-emerald-400" />}
             label="Biodiversity"
             value={state.avg_biodiversity.toFixed(1)}
             warn={state.avg_biodiversity < 40}
           />
           <MetricRow
-            icon={<AlertTriangle size={10} className="text-red-500" />}
+            icon={<AlertTriangle size={12} className="text-red-500" />}
             label="Total algae"
             value={state.total_algae.toFixed(0)}
             warn={state.total_algae > 5000}
@@ -171,7 +171,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ state, healthHistory }) 
       {/* Drivers summary */}
       <div className="bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-3">
         <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Drivers</div>
-        <div className="grid grid-cols-2 gap-1 text-[10px]">
+        <div className="grid grid-cols-2 gap-1 text-xs">
           <span className="text-gray-500">Temperature</span>
           <span className="text-orange-400 font-medium">{state.drivers.temperature.toFixed(1)} °C</span>
           <span className="text-gray-500">Rainfall</span>
@@ -195,11 +195,11 @@ const MetricRow: React.FC<{
   warn?: boolean;
 }> = ({ icon, label, value, warn }) => (
   <>
-    <div className="flex items-center gap-1 text-[10px] text-gray-400">
+    <div className="flex items-center gap-1 text-xs text-gray-400">
       {icon}
       {label}
     </div>
-    <div className={`text-[10px] font-medium text-right ${warn ? "text-orange-400" : "text-gray-200"}`}>
+    <div className={`text-xs font-medium text-right ${warn ? "text-orange-400" : "text-gray-200"}`}>
       {value}
     </div>
   </>

@@ -35,11 +35,11 @@ import {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CELL_SIZE = 24;
+const CELL_SIZE = 34;
 const GRID_ROWS = 20;
 const GRID_COLS = 28;
-const CANVAS_W  = GRID_COLS * CELL_SIZE;   // 672
-const CANVAS_H  = GRID_ROWS * CELL_SIZE;   // 480
+const CANVAS_W  = GRID_COLS * CELL_SIZE;   // 952
+const CANVAS_H  = GRID_ROWS * CELL_SIZE;   // 680
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 

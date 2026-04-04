@@ -79,6 +79,13 @@ class DriversRequest(BaseModel):
     season:          Optional[int]   = Field(None, ge=0, le=3)
 
 
+class FlowConfigRequest(BaseModel):
+    inflow_north:  Optional[bool] = None
+    inflow_west:   Optional[bool] = None
+    inflow_east:   Optional[bool] = None
+    outflow_south: Optional[bool] = None
+
+
 class AgentStepRequest(BaseModel):
     agent_type: Literal["heuristic", "llm", "rl"] = "heuristic"
 
@@ -132,6 +139,14 @@ def update_drivers(req: DriversRequest) -> Dict[str, Any]:
     """Update one or more environmental driver values."""
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     env.update_drivers(**updates)
+    return env.get_state()
+
+
+@app.post("/api/flows")
+def update_flows(req: FlowConfigRequest) -> Dict[str, Any]:
+    """Enable/disable inflow/outflow channels for scenario configuration."""
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    env.update_flow_config(**updates)
     return env.get_state()
 
 

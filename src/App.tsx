@@ -44,6 +44,7 @@ export default function App() {
     agentLive,
     agentLiveType,
     agentInterval,
+    playbackSpeed,
     backendOnline,
     error,
     lastAgentAction,
@@ -54,10 +55,13 @@ export default function App() {
     setAgentLive,
     setAgentLiveType,
     setAgentInterval,
+    setPlaybackSpeed,
     stepOnce,
     reset,
     applyAction,
     updateDrivers,
+    updateFlows,
+    applyFlowPreset,
     runAgentStep,
     runAgentAuto,
     exportSession,
@@ -175,84 +179,86 @@ export default function App() {
       )}
 
       {/* ── Main body ────────────────────────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden min-h-0">
+      <div className="flex-1 min-h-0 overflow-hidden p-3">
+        <div className="h-full grid grid-cols-1 xl:grid-cols-[260px_minmax(0,1fr)_360px] gap-3">
 
-        {/* ── Left: Controls ──────────────────────────────────────────────── */}
-        <aside className="w-44 flex-shrink-0 border-r border-[#1a3050] overflow-y-auto p-2">
-          <ControlPanel
-            state={state}
-            isRunning={isRunning}
-            selectedAction={selectedAction}
-            onPlay={() => setIsRunning(!isRunning)}
-            onStep={stepOnce}
-            onReset={reset}
-            onDriverChange={updateDrivers}
-            onActionSelect={setSelectedAction}
-          />
-        </aside>
-
-        {/* ── Centre: Sandbox ──────────────────────────────────────────────── */}
-        <main className="flex-1 flex flex-col items-center justify-start overflow-auto p-3 gap-2 min-w-0">
-          {/* Grid info bar */}
-          <div className="w-full max-w-[672px] flex items-center justify-between text-[9px] text-gray-600">
-            <span>28×20 grid · ~50 m² per cell</span>
-            <span>Click a water cell to apply selected intervention</span>
-          </div>
-
-          {/* The sandbox itself */}
-          <GridCanvas
-            state={state}
-            selectedAction={selectedAction}
-            onCellClick={handleCellClick}
-            tickCount={tickCount}
-          />
-
-          {/* Compact legend row */}
-          <div className="w-full max-w-[672px] flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] text-gray-600">
-            <LegendDot color="rgb(15,38,82)"         label="Clean water" />
-            <LegendDot color="rgb(22,90,25)"         label="Bloom ≥35" />
-            <LegendDot color="rgb(70,190,10)"        label="Severe bloom ≥65" />
-            <LegendDot color="rgb(120,20,20)"        label="Industrial" />
-            <LegendDot color="rgb(75,55,12)"         label="Sediment" />
-            <LegendDot color="rgb(3,3,12)"           label="Dead zone (DO≤5)" />
-            <LegendDot color="rgb(38,58,38)"         label="Land" />
-            <LegendDot color="rgba(80,170,255,0.75)" label="▶ Inflow" />
-          </div>
-
-          {/* Ecological crisis alert */}
-          {deadZones > 10 && (
-            <div className="w-full max-w-[672px] bg-red-900/20 border border-red-800/40 rounded-lg p-2 text-xs text-red-300 flex items-center gap-2">
-              <AlertTriangle size={13} className="flex-shrink-0" />
-              <span>
-                <strong>ECOLOGICAL CRISIS:</strong> {deadZones} dead zones — deploy emergency aeration immediately.
-              </span>
-            </div>
-          )}
-
-          {/* Selected action indicator */}
-          {selectedAction > 0 && (
-            <div className="w-full max-w-[672px] flex items-center gap-2 bg-[#0a1628]/60 border border-[#1e3a5f]/40 rounded px-2.5 py-1.5 text-[10px]">
-              <span
-                className="w-2 h-2 rounded-full flex-shrink-0"
-                style={{ backgroundColor: ACTION_META.find(a => a.id === selectedAction)?.color ?? "#888" }}
+          {/* Left rail: controls + stats */}
+          <aside className="min-h-0 flex flex-col gap-3 overflow-hidden">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+              <ControlPanel
+                state={state}
+                isRunning={isRunning}
+                selectedAction={selectedAction}
+                playbackSpeed={playbackSpeed}
+                onPlay={() => setIsRunning(!isRunning)}
+                onStep={stepOnce}
+                onReset={reset}
+                onDriverChange={updateDrivers}
+                onFlowChange={updateFlows}
+                onFlowPreset={applyFlowPreset}
+                onPlaybackSpeed={setPlaybackSpeed}
+                onActionSelect={setSelectedAction}
               />
-              <span className="text-gray-400">Active intervention:</span>
-              <span className="text-white font-medium">
-                {ACTION_META.find(a => a.id === selectedAction)?.name}
-              </span>
-              <span className="ml-auto text-gray-600 text-[9px]">
-                {ACTION_META.find(a => a.id === selectedAction)?.description}
-              </span>
             </div>
-          )}
-        </main>
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1 bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-2">
+              <StatsPanel state={state} healthHistory={healthHistory} />
+            </div>
+          </aside>
 
-        {/* ── Right: Agent + Stats + Activity Log ──────────────────────────── */}
-        <aside className="w-72 flex-shrink-0 border-l border-[#1a3050] flex flex-col overflow-hidden">
+          {/* Center: map and map-local info */}
+          <main className="min-h-0 flex flex-col items-center gap-3 overflow-auto rounded-lg border border-[#1a3050] bg-[#071224] p-3">
+            <div className="w-full max-w-[952px] flex items-center justify-between text-xs text-gray-400">
+              <span className="font-medium">28×20 grid · ~50 m² per cell</span>
+              <span>Click a water cell to apply selected intervention</span>
+            </div>
 
-          {/* Top half: Agent controls + Stats */}
-          <div className="flex-shrink-0 overflow-y-auto p-2 border-b border-[#1a3050]" style={{ maxHeight: "58%" }}>
-            <div className="flex flex-col gap-2">
+            <GridCanvas
+              state={state}
+              selectedAction={selectedAction}
+              onCellClick={handleCellClick}
+              tickCount={tickCount}
+            />
+
+            <div className="w-full max-w-[952px] flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
+              <LegendDot color="rgb(15,38,82)"         label="Clean water" />
+              <LegendDot color="rgb(22,90,25)"         label="Bloom ≥35" />
+              <LegendDot color="rgb(70,190,10)"        label="Severe bloom ≥65" />
+              <LegendDot color="rgb(120,20,20)"        label="Industrial" />
+              <LegendDot color="rgb(75,55,12)"         label="Sediment" />
+              <LegendDot color="rgb(3,3,12)"           label="Dead zone (DO≤5)" />
+              <LegendDot color="rgb(38,58,38)"         label="Land" />
+              <LegendDot color="rgba(80,170,255,0.75)" label="▶ Inflow" />
+            </div>
+
+            {deadZones > 10 && (
+              <div className="w-full max-w-[952px] bg-red-900/20 border border-red-800/40 rounded-lg p-3 text-sm text-red-300 flex items-center gap-2">
+                <AlertTriangle size={15} className="flex-shrink-0" />
+                <span>
+                  <strong>ECOLOGICAL CRISIS:</strong> {deadZones} dead zones - deploy emergency aeration immediately.
+                </span>
+              </div>
+            )}
+
+            {selectedAction > 0 && (
+              <div className="w-full max-w-[952px] flex items-center gap-2 bg-[#0a1628]/60 border border-[#1e3a5f]/40 rounded px-3 py-2 text-xs">
+                <span
+                  className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: ACTION_META.find(a => a.id === selectedAction)?.color ?? "#888" }}
+                />
+                <span className="text-gray-300">Active intervention:</span>
+                <span className="text-white font-semibold">
+                  {ACTION_META.find(a => a.id === selectedAction)?.name}
+                </span>
+                <span className="ml-auto text-gray-500 text-xs">
+                  {ACTION_META.find(a => a.id === selectedAction)?.description}
+                </span>
+              </div>
+            )}
+          </main>
+
+          {/* Right rail: agent controls + split logs */}
+          <aside className="min-h-0 flex flex-col gap-3 overflow-hidden">
+            <div className="flex-shrink-0 overflow-y-auto pr-1 max-h-[48%] bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-2">
               <AgentPanel
                 isAgentRunning={isAgentRunning}
                 agentLive={agentLive}
@@ -267,25 +273,32 @@ export default function App() {
                 onSetAgentLiveType={setAgentLiveType}
                 onSetAgentInterval={setAgentInterval}
               />
+            </div>
 
-              <div className="border-t border-[#1a3050] pt-2">
-                <StatsPanel state={state} healthHistory={healthHistory} />
+            <div className="flex-1 min-h-0 grid grid-rows-2 gap-3">
+              <div className="min-h-0 border border-[#1a3050] rounded-lg overflow-hidden bg-[#0d1b2e]">
+                <ActivityLog
+                  state={state}
+                  lastAgentAction={lastAgentAction}
+                  agentLiveType={agentLiveType}
+                  rlStats={rlStats}
+                  mode="environment"
+                  title="Environment Updates"
+                />
+              </div>
+              <div className="min-h-0 border border-[#1a3050] rounded-lg overflow-hidden bg-[#0d1b2e]">
+                <ActivityLog
+                  state={state}
+                  lastAgentAction={lastAgentAction}
+                  agentLiveType={agentLiveType}
+                  rlStats={rlStats}
+                  mode="agent"
+                  title="Agent Interventions"
+                />
               </div>
             </div>
-          </div>
-
-          {/* Bottom half: Activity Log */}
-          <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-            <ActivityLog
-              state={state}
-              lastAgentAction={lastAgentAction}
-              agentLiveType={agentLiveType}
-              rlStats={rlStats}
-            />
-          </div>
-
-        </aside>
-
+          </aside>
+        </div>
       </div>
 
       {/* ── Bottom metrics strip ──────────────────────────────────────────────── */}

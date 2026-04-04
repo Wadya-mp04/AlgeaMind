@@ -34,10 +34,20 @@ export interface GlobalDrivers {
   timestep:       number;
 }
 
+export interface FlowConfig {
+  inflow_north: boolean;
+  inflow_west: boolean;
+  inflow_east: boolean;
+  outflow_south: boolean;
+}
+
+export type FlowPreset = "default" | "lake" | "river" | "reservoir";
+
 // ─── Simulation snapshot (full state returned by API) ─────────────────────────
 export interface SimulationState {
   grid:              CellState[][];
   drivers:           GlobalDrivers;
+  flow_config:       FlowConfig;
   timestep:          number;
   global_health:     number;   // 0–100 composite score
   bloom_cells:       number;
@@ -156,3 +166,30 @@ export function healthColor(score: number): string {
 }
 
 export const SEASON_NAMES = ["Winter", "Spring", "Summer", "Fall"];
+
+export const FLOW_PRESETS: Record<FlowPreset, FlowConfig> = {
+  default: {
+    inflow_north: true,
+    inflow_west: true,
+    inflow_east: true,
+    outflow_south: true,
+  },
+  lake: {
+    inflow_north: false,
+    inflow_west: false,
+    inflow_east: false,
+    outflow_south: false,
+  },
+  river: {
+    inflow_north: false,
+    inflow_west: true,
+    inflow_east: false,
+    outflow_south: true,
+  },
+  reservoir: {
+    inflow_north: true,
+    inflow_west: false,
+    inflow_east: false,
+    outflow_south: true,
+  },
+};

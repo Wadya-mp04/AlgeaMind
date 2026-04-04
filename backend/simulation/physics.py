@@ -39,7 +39,13 @@ from simulation.cell_state import CellState, GlobalDrivers
 # 1. INFLOW NUTRIENTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def inflow_nutrients(cell: CellState, row: int, col: int, drivers: GlobalDrivers) -> None:
+def inflow_nutrients(
+    cell: CellState,
+    row: int,
+    col: int,
+    drivers: GlobalDrivers,
+    grid: List[List[CellState]],
+) -> None:
     """Add runoff nutrients and sediment to inflow cells each tick."""
     if cell.cell_type != CELL_INFLOW:
         return
@@ -54,15 +60,32 @@ def inflow_nutrients(cell: CellState, row: int, col: int, drivers: GlobalDrivers
     p_in  = RAIN_P_INPUT  * amp * fert
     s_in  = RAIN_SEDIMENT_INPUT * amp
 
-    cell.nitrogen   = min(100.0, cell.nitrogen   + n_in)
-    cell.phosphorus = min(100.0, cell.phosphorus + p_in)
-    cell.sediment   = min(100.0, cell.sediment   + s_in)
-
-    # Reduce inflow if a nutrient-intercept intervention is active (actions 1 & 9)
+    # Apply interception before the load is distributed so containment also
+    # reduces leakage into neighboring water cells.
+    intercept_factor = 1.0
     if cell.nutrient_intercept > 0:
-        factor = max(0.0, 1.0 - cell.nutrient_intercept)
-        cell.nitrogen   *= factor
-        cell.phosphorus *= factor
+        intercept_factor = max(0.0, 1.0 - cell.nutrient_intercept)
+
+    n_in_eff = n_in * intercept_factor
+    p_in_eff = p_in * intercept_factor
+    s_in_eff = s_in * intercept_factor
+
+    cell.nitrogen   = min(100.0, cell.nitrogen   + n_in_eff)
+    cell.phosphorus = min(100.0, cell.phosphorus + p_in_eff)
+    cell.sediment   = min(100.0, cell.sediment   + s_in_eff)
+
+    # Spread a portion of the already-intercepted inflow loads into adjacent
+    # water so the impact is not confined to the edge channel alone.
+    neighbor_fraction = 0.20
+    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        nr, nc = row + dr, col + dc
+        if 0 <= nr < len(grid) and 0 <= nc < len(grid[0]):
+            nbr = grid[nr][nc]
+            if nbr.cell_type == CELL_LAND:
+                continue
+            nbr.nitrogen   = min(100.0, nbr.nitrogen   + n_in_eff * neighbor_fraction)
+            nbr.phosphorus = min(100.0, nbr.phosphorus + p_in_eff * neighbor_fraction)
+            nbr.sediment   = min(100.0, nbr.sediment   + s_in_eff * neighbor_fraction)
 
     # East inflow: industrial discharge
     if (row, col) in INFLOW_EAST_SET:
@@ -99,9 +122,13 @@ def grow_algae(cell: CellState, drivers: GlobalDrivers) -> None:
         * light_factor
     )
 
+    # Small recruitment term: once catalysts return, a fully cleared cell can
+    # still seed new algae instead of staying permanently at zero.
+    seed_biomass = 1.5 + 0.015 * (cell.nitrogen + cell.phosphorus)
+
     # Logistic term: growth slows as algae approaches carrying capacity (100)
     logistic = 1.0 - cell.algae / 100.0
-    delta     = growth_rate * cell.algae * logistic - ALGAE_NATURAL_DECAY * cell.algae
+    delta     = growth_rate * (cell.algae + seed_biomass) * logistic - ALGAE_NATURAL_DECAY * cell.algae
 
     # Biological-control intervention reduces net growth by 5 % per tick
     if cell.bio_control:
@@ -246,7 +273,14 @@ def spread_algae(grid: List[List[CellState]]) -> None:
                 continue
 
             # Amount leaving this cell (less if high flow — faster flushing removes algae)
-            spread_out = ALGAE_SPREAD_RATE * cell.algae * max(0.1, 1.0 - 0.4 * cell.flow)
+            # Low-biomass but nutrient-rich cells can still seed a small amount of
+            # algae outward, so a cleared patch can re-colonise its neighbours.
+            nutrient_seed = 0.0
+            if cell.algae < 5.0:
+                nutrient_seed = max(0.0, (cell.nitrogen / 50.0) + (cell.phosphorus / 25.0) - 0.4)
+
+            spread_source = cell.algae + (nutrient_seed * 3.0)
+            spread_out = ALGAE_SPREAD_RATE * spread_source * max(0.1, 1.0 - 0.4 * cell.flow)
             per_nbr    = spread_out / len(water_nbrs)
 
             delta[r][c] -= spread_out
@@ -312,7 +346,7 @@ def full_physics_step(
             cell = grid[r][c]
             if cell.cell_type == CELL_LAND:
                 continue
-            inflow_nutrients(cell, r, c, drivers)
+            inflow_nutrients(cell, r, c, drivers, grid)
             grow_algae(cell, drivers)
             update_oxygen(cell)
             update_biodiversity(cell)

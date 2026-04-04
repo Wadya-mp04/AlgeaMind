@@ -6,9 +6,12 @@
  * fires automatically every AGENT_INTERVAL ticks instead of plain stepOnce.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { FLOW_PRESETS } from "../data/types";
 import type {
   AgentAction,
   AgentStepResult,
+  FlowConfig,
+  FlowPreset,
   GlobalDrivers,
   SimulationState,
 } from "../data/types";
@@ -50,6 +53,7 @@ export interface UseSimulationReturn {
   agentLive:       boolean;
   agentLiveType:   AgentType;
   agentInterval:   number;
+  playbackSpeed:   number;
   backendOnline:   boolean;
   error:           string | null;
   lastAgentAction: AgentAction | null;
@@ -61,10 +65,13 @@ export interface UseSimulationReturn {
   setAgentLive:    (v: boolean) => void;
   setAgentLiveType:(v: AgentType) => void;
   setAgentInterval:(v: number) => void;
+  setPlaybackSpeed:(v: number) => void;
   stepOnce:        () => Promise<void>;
   reset:           () => Promise<void>;
   applyAction:     (actionId: number, row: number, col: number) => Promise<void>;
   updateDrivers:   (partial: Partial<GlobalDrivers>) => Promise<void>;
+  updateFlows:     (partial: Partial<FlowConfig>) => Promise<void>;
+  applyFlowPreset: (preset: FlowPreset) => Promise<void>;
   runAgentStep:    (agentType: AgentType) => Promise<void>;
   runAgentAuto:    (agentType: AgentType, n?: number) => Promise<void>;
   exportSession:   () => Promise<void>;
@@ -94,6 +101,7 @@ export function useSimulation(): UseSimulationReturn {
   const [agentLive,       setAgentLive]       = useState(false);
   const [agentLiveType,   setAgentLiveType]   = useState<AgentType>("heuristic");
   const [agentInterval,   setAgentInterval]   = useState(5);
+  const [playbackSpeed,   setPlaybackSpeed]   = useState(1);
   const [backendOnline,   setBackendOnline]   = useState(false);
   const [error,           setError]           = useState<string | null>(null);
   const [lastAgentAction, setLastAgentAction] = useState<AgentAction | null>(null);
@@ -102,15 +110,18 @@ export function useSimulation(): UseSimulationReturn {
   const [healthHistory,   setHealthHistory]   = useState<number[]>([]);
 
   const intervalRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isAdvancingRef    = useRef(false);
   const tickCounterRef    = useRef(0);
   const isAgentRunningRef = useRef(false);
   const agentLiveRef      = useRef(agentLive);
   const agentLiveTypeRef  = useRef(agentLiveType);
   const agentIntervalRef  = useRef(agentInterval);
+  const playbackSpeedRef  = useRef(playbackSpeed);
 
   useEffect(() => { agentLiveRef.current    = agentLive;     }, [agentLive]);
   useEffect(() => { agentLiveTypeRef.current = agentLiveType; }, [agentLiveType]);
   useEffect(() => { agentIntervalRef.current = agentInterval; }, [agentInterval]);
+  useEffect(() => { playbackSpeedRef.current = playbackSpeed; }, [playbackSpeed]);
 
   // ── Backend ping ───────────────────────────────────────────────────────────
   const pingBackend = useCallback(async () => {
@@ -172,6 +183,20 @@ export function useSimulation(): UseSimulationReturn {
     }
   }, []);
 
+  const advanceOneTick = useCallback(async () => {
+    if (agentLiveRef.current && !isAgentRunningRef.current) {
+      tickCounterRef.current += 1;
+      if (tickCounterRef.current >= agentIntervalRef.current) {
+        tickCounterRef.current = 0;
+        await _doAgentStep(agentLiveTypeRef.current);
+        return;
+      }
+    }
+
+    const data = await apiPost<StateWithHistory>("/api/step");
+    applyStateUpdate(data, setState, setHealthHistory);
+  }, [_doAgentStep]);
+
   // ── Auto-run loop ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isRunning) {
@@ -183,27 +208,26 @@ export function useSimulation(): UseSimulationReturn {
     tickCounterRef.current = 0;
 
     intervalRef.current = setInterval(async () => {
-      if (agentLiveRef.current && !isAgentRunningRef.current) {
-        tickCounterRef.current += 1;
-        if (tickCounterRef.current >= agentIntervalRef.current) {
-          tickCounterRef.current = 0;
-          await _doAgentStep(agentLiveTypeRef.current);
-          return;
-        }
-      }
+      if (isAdvancingRef.current) return;
+      isAdvancingRef.current = true;
+
       try {
-        const data = await apiPost<StateWithHistory>("/api/step");
-        applyStateUpdate(data, setState, setHealthHistory);
+        const steps = Math.max(1, playbackSpeedRef.current);
+        for (let i = 0; i < steps; i += 1) {
+          await advanceOneTick();
+        }
       } catch (e) {
         setError(String(e));
         setIsRunning(false);
+      } finally {
+        isAdvancingRef.current = false;
       }
     }, TICK_INTERVAL_MS);
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [isRunning, _doAgentStep]);
+  }, [isRunning, advanceOneTick]);
 
   // ── Reset ─────────────────────────────────────────────────────────────────
   const reset = useCallback(async () => {
@@ -243,6 +267,28 @@ export function useSimulation(): UseSimulationReturn {
     try {
       const data = await apiPost<SimulationState>("/api/drivers", partial);
       setState(data);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  // ── Update inflow/outflow topology ──────────────────────────────────────
+  const updateFlows = useCallback(async (partial: Partial<FlowConfig>) => {
+    try {
+      const data = await apiPost<SimulationState>("/api/flows", partial);
+      setState(data);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  const applyFlowPreset = useCallback(async (preset: FlowPreset) => {
+    try {
+      const next = FLOW_PRESETS[preset];
+      const data = await apiPost<SimulationState>("/api/flows", next);
+      setState(data);
+      setError(null);
     } catch (e) {
       setError(String(e));
     }
@@ -305,6 +351,7 @@ export function useSimulation(): UseSimulationReturn {
     agentLive,
     agentLiveType,
     agentInterval,
+    playbackSpeed,
     backendOnline,
     error,
     lastAgentAction,
@@ -315,10 +362,13 @@ export function useSimulation(): UseSimulationReturn {
     setAgentLive,
     setAgentLiveType,
     setAgentInterval,
+    setPlaybackSpeed,
     stepOnce,
     reset,
     applyAction,
     updateDrivers,
+    updateFlows,
+    applyFlowPreset,
     runAgentStep,
     runAgentAuto,
     exportSession,

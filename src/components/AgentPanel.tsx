@@ -60,8 +60,8 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       {/* ── Agent type selector ──────────────────────────────────────────── */}
       <div className="bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-2.5">
         <div className="flex items-center gap-1.5 mb-2">
-          <Bot size={12} className="text-[#4a9eff]" />
-          <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Agent Mode</span>
+          <Bot size={14} className="text-[#4a9eff]" />
+          <span className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Agent Mode</span>
         </div>
         <div className="flex gap-1.5">
           <AgentTypeBtn
@@ -92,10 +92,10 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       {agentLiveType === "rl" && (
         <div className="bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-2.5">
           <div className="flex items-center gap-1.5 mb-1.5">
-            <TrendingUp size={11} className="text-purple-400" />
-            <span className="text-[10px] font-semibold text-purple-400 uppercase tracking-wider">RL Training</span>
+            <TrendingUp size={13} className="text-purple-400" />
+            <span className="text-xs font-semibold text-purple-300 uppercase tracking-wider">RL Training</span>
           </div>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <span className="text-gray-500">Exploration ε</span>
             <span className="text-purple-300 font-mono">{rlStats?.epsilon?.toFixed(3) ?? "—"}</span>
             <span className="text-gray-500">Q-table entries</span>
@@ -131,21 +131,21 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       <div className="bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-2.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
-            <Radio size={11} className={agentLive ? "text-green-400 animate-pulse" : "text-gray-500"} />
-            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Live</span>
-            <span className="text-[9px] text-gray-600">
+            <Radio size={13} className={agentLive ? "text-green-400 animate-pulse" : "text-gray-500"} />
+            <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Live</span>
+            <span className="text-xs text-gray-500">
               every
             </span>
             <select
               value={agentInterval}
               onChange={e => onSetAgentInterval(Number(e.target.value))}
-              className="bg-[#0a1628] border border-[#1e3a5f] text-gray-300 text-[9px] rounded px-1 py-0.5"
+              className="bg-[#0a1628] border border-[#1e3a5f] text-gray-300 text-xs rounded px-1 py-0.5"
             >
               {[1, 3, 5, 10, 20].map(n => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
-            <span className="text-[9px] text-gray-600">ticks</span>
+            <span className="text-xs text-gray-600">ticks</span>
           </div>
           <button
             onClick={() => onSetAgentLive(!agentLive)}
@@ -162,26 +162,26 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           onClick={() => onAgentStep(agentLiveType)}
           disabled={isAgentRunning}
           className="flex-1 flex items-center justify-center gap-1.5 bg-[#4a9eff]/10 hover:bg-[#4a9eff]/20
-                     border border-[#4a9eff]/40 text-[#4a9eff] text-[10px] font-semibold py-1.5 rounded
+                     border border-[#4a9eff]/40 text-[#4a9eff] text-xs font-semibold py-2 rounded
                      transition-colors disabled:opacity-50"
         >
-          {isAgentRunning ? <Loader2 size={10} className="animate-spin" /> : <PlayCircle size={10} />}
+          {isAgentRunning ? <Loader2 size={12} className="animate-spin" /> : <PlayCircle size={12} />}
           {isAgentRunning ? "Thinking…" : "Step"}
         </button>
         <button
           onClick={() => onAgentAuto(agentLiveType, autoSteps)}
           disabled={isAgentRunning}
           className="flex-1 flex items-center justify-center gap-1.5 bg-[#2dba57]/10 hover:bg-[#2dba57]/20
-                     border border-[#2dba57]/40 text-[#2dba57] text-[10px] font-semibold py-1.5 rounded
+                     border border-[#2dba57]/40 text-[#2dba57] text-xs font-semibold py-2 rounded
                      transition-colors disabled:opacity-50"
         >
-          {isAgentRunning ? <Loader2 size={10} className="animate-spin" /> : <Zap size={10} />}
+          {isAgentRunning ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
           ×{autoSteps}
         </button>
         <select
           value={autoSteps}
           onChange={e => setAutoSteps(Number(e.target.value))}
-          className="bg-[#0a1628] border border-[#1e3a5f] text-gray-300 text-[9px] rounded px-1"
+          className="bg-[#0a1628] border border-[#1e3a5f] text-gray-300 text-xs rounded px-1"
         >
           {[3, 5, 10, 20].map(n => (
             <option key={n} value={n}>{n}</option>
@@ -194,16 +194,16 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         <div className="bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-2.5">
           <div className="flex items-center gap-1.5 mb-1.5">
             <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: actionMeta?.color ?? "#888" }} />
-            <span className="text-[10px] font-semibold text-gray-300 truncate">{lastAction.action_name}</span>
+            <span className="text-xs font-semibold text-gray-200 truncate">{lastAction.action_name}</span>
             {agentLive && (
-              <span className="ml-auto text-[8px] text-green-400 border border-green-400/30 px-1 rounded flex-shrink-0">AUTO</span>
+              <span className="ml-auto text-[10px] text-green-400 border border-green-400/30 px-1 rounded flex-shrink-0">AUTO</span>
             )}
           </div>
-          <div className="text-[9px] text-gray-500 mb-1">
+          <div className="text-xs text-gray-500 mb-1">
             → ({lastAction.row}, {lastAction.col})
           </div>
           {lastAction.reasoning && (
-            <div className="text-[9px] text-gray-500 italic border-l border-[#1e3a5f] pl-1.5 leading-relaxed line-clamp-3">
+            <div className="text-xs text-gray-500 italic border-l border-[#1e3a5f] pl-1.5 leading-relaxed line-clamp-3">
               {lastAction.reasoning}
             </div>
           )}
@@ -214,17 +214,17 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       {agentLiveType === "llm" && agentBrief && (
         <div className="bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-2.5">
           <button
-            className="flex items-center justify-between w-full text-[10px] font-semibold text-gray-300"
+            className="flex items-center justify-between w-full text-xs font-semibold text-gray-300"
             onClick={() => setBriefOpen(p => !p)}
           >
             <div className="flex items-center gap-1.5">
-              <Brain size={11} className="text-[#4a9eff]" />
+              <Brain size={13} className="text-[#4a9eff]" />
               Research Brief
             </div>
-            {briefOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+            {briefOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
           </button>
           {briefOpen && (
-            <div className="mt-1.5 max-h-40 overflow-y-auto text-[9px] text-gray-400 leading-relaxed whitespace-pre-wrap">
+            <div className="mt-1.5 max-h-40 overflow-y-auto text-xs text-gray-400 leading-relaxed whitespace-pre-wrap">
               {agentBrief}
             </div>
           )}
@@ -247,7 +247,7 @@ const AgentTypeBtn: React.FC<{
   <button
     onClick={onClick}
     title={tooltip}
-    className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[10px] font-medium
+    className={`flex-1 flex items-center justify-center gap-1 py-2 rounded text-xs font-medium
                 transition-colors ${
                   active
                     ? "bg-[#4a9eff]/20 border border-[#4a9eff] text-[#4a9eff]"

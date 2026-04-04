@@ -43,6 +43,8 @@ interface ActivityLogProps {
   lastAgentAction: import("../data/types").AgentAction | null;
   agentLiveType:  string;
   rlStats:        RLStats | null;
+  mode?:          "all" | "environment" | "agent";
+  title?:         string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -156,6 +158,8 @@ export const ActivityLog: React.FC<ActivityLogProps> = ({
   lastAgentAction,
   agentLiveType,
   rlStats,
+  mode = "all",
+  title = "Activity Log",
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -169,29 +173,39 @@ export const ActivityLog: React.FC<ActivityLogProps> = ({
       )
     : [];
 
+  const filteredFeed = feed.filter((entry) => {
+    if (mode === "environment") {
+      return entry.kind !== "agent" && entry.kind !== "intervention";
+    }
+    if (mode === "agent") {
+      return entry.kind === "agent" || entry.kind === "intervention";
+    }
+    return true;
+  });
+
   // Auto-scroll to top (newest entry) when feed changes
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
     }
-  }, [feed.length]);
+  }, [filteredFeed.length]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[#1a3050] flex-shrink-0">
         <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0" />
-        <span className="text-[10px] font-semibold text-gray-300 uppercase tracking-wider">
-          Activity Log
+        <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
+          {title}
         </span>
-        <span className="ml-auto text-[9px] text-gray-600">{feed.length} entries</span>
+        <span className="ml-auto text-[10px] text-gray-500">{filteredFeed.length} entries</span>
       </div>
 
       {/* Legend pills */}
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 px-3 py-1.5 border-b border-[#1a3050]/60 flex-shrink-0">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 px-3 py-2 border-b border-[#1a3050]/60 flex-shrink-0">
         {(["agent", "intervention", "weather", "spill", "season"] as EntryKind[]).map(k => (
-          <span key={k} className="flex items-center gap-1 text-[9px]" style={{ color: kindColor(k) }}>
-            <KindIcon kind={k} size={9} />
+          <span key={k} className="flex items-center gap-1 text-[10px]" style={{ color: kindColor(k) }}>
+            <KindIcon kind={k} size={10} />
             {k}
           </span>
         ))}
@@ -200,19 +214,19 @@ export const ActivityLog: React.FC<ActivityLogProps> = ({
       {/* Scrollable feed */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto min-h-0 px-2 py-1.5 flex flex-col gap-0.5"
+        className="flex-1 overflow-y-auto min-h-0 px-2 py-2 flex flex-col gap-1"
         style={{ scrollbarWidth: "thin", scrollbarColor: "#1e3a5f transparent" }}
       >
-        {feed.length === 0 && (
-          <div className="text-[10px] text-gray-600 italic px-1 pt-2">
+        {filteredFeed.length === 0 && (
+          <div className="text-xs text-gray-600 italic px-1 pt-2">
             Run the simulation to see activity…
           </div>
         )}
 
-        {feed.map(entry => (
+        {filteredFeed.map(entry => (
           <div
             key={entry.id}
-            className="flex items-start gap-2 py-1 px-1.5 rounded hover:bg-white/5 transition-colors group"
+            className="flex items-start gap-2 py-1.5 px-2 rounded hover:bg-white/5 transition-colors group"
           >
             {/* Icon + colour bar */}
             <div
@@ -223,26 +237,26 @@ export const ActivityLog: React.FC<ActivityLogProps> = ({
                 className="w-0.5 h-full rounded-full self-stretch"
                 style={{ backgroundColor: entry.color, minHeight: 14 }}
               />
-              <KindIcon kind={entry.kind} size={10} />
+              <KindIcon kind={entry.kind} size={12} />
             </div>
 
             {/* Content */}
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-1.5 flex-wrap">
                 <span
-                  className="text-[10px] font-medium leading-tight truncate"
+                  className="text-xs font-medium leading-tight truncate"
                   style={{ color: entry.color }}
                 >
                   {entry.message}
                 </span>
                 {entry.detail && entry.kind === "intervention" && (
-                  <span className="text-[9px] text-gray-500 flex-shrink-0">{entry.detail}</span>
+                  <span className="text-[10px] text-gray-500 flex-shrink-0">{entry.detail}</span>
                 )}
               </div>
 
               {/* Agent reasoning — show truncated with expand on hover */}
               {entry.kind === "agent" && entry.detail && (
-                <div className="text-[9px] text-gray-500 leading-relaxed mt-0.5 italic line-clamp-2 group-hover:line-clamp-none transition-all">
+                <div className="text-[10px] text-gray-500 leading-relaxed mt-0.5 italic line-clamp-2 group-hover:line-clamp-none transition-all">
                   {entry.detail}
                 </div>
               )}
@@ -250,7 +264,7 @@ export const ActivityLog: React.FC<ActivityLogProps> = ({
 
             {/* Tick badge */}
             {entry.t < 999999 && (
-              <span className="flex-shrink-0 text-[8px] text-gray-600 mt-0.5">
+              <span className="flex-shrink-0 text-[10px] text-gray-600 mt-0.5">
                 t={entry.t}
               </span>
             )}
