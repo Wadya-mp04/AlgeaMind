@@ -58,6 +58,7 @@ class GridEnvironment:
         self._recent_interventions: List[Dict] = []
         self._health_history: List[float] = []
         self._season_tick_counter: int = 0
+        self.external_data_context: Dict[str, Any] = {}  # real-world data for LLM agent
         self.reset()
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -206,6 +207,9 @@ class GridEnvironment:
         worst.sort(key=lambda x: x["health"])
         state["worst_cells"] = worst[:12]
         del state["grid"]   # grid too large for agent prompt
+        # Include real-world data context if available
+        if self.external_data_context:
+            state["external_data"] = self.external_data_context
         return state
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -409,15 +413,74 @@ class GridEnvironment:
     # RANDOM EVENTS
     # ─────────────────────────────────────────────────────────────────────────
 
+    def trigger_event(self, event_type: str) -> str:
+        """Manually trigger an environmental event from the frontend."""
+        if event_type == "industrial_spill":
+            # Collect all active inflow cells
+            spill_candidates = [
+                (r, c) for r in range(GRID_ROWS) for c in range(GRID_COLS)
+                if self.grid[r][c].cell_type == CELL_INFLOW
+            ]
+            if not spill_candidates:
+                return "No active inflow cells for spill"
+            # Bias 60% chance towards east inflow (industrial zone)
+            east = [(r, c) for r, c in spill_candidates if c == GRID_COLS - 1]
+            if east and random.random() < 0.6:
+                r, c = random.choice(east)
+            else:
+                r, c = random.choice(spill_candidates)
+            self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + SPILL_MAGNITUDE)
+            msg = f"⚠ Manual industrial spill at ({r},{c})!"
+            self._log(msg)
+            return msg
+        elif event_type == "heavy_rain":
+            self.drivers.rainfall = min(1.0, self.drivers.rainfall + 0.55)
+            self.drivers.storm_intensity = min(1.0, self.drivers.storm_intensity + 0.45)
+            msg = "🌧 Manual heavy rainfall triggered — nutrient runoff surge!"
+            self._log(msg)
+            return msg
+        elif event_type == "heat_wave":
+            self.drivers.temperature = min(35.0, self.drivers.temperature + 9.0)
+            msg = f"🌡 Heat wave! Temperature raised to {self.drivers.temperature:.1f}°C."
+            self._log(msg)
+            return msg
+        elif event_type == "drought":
+            self.drivers.rainfall = max(0.0, self.drivers.rainfall - 0.3)
+            self.drivers.storm_intensity = max(0.0, self.drivers.storm_intensity - 0.2)
+            msg = "☀ Drought conditions — reduced inflow and runoff."
+            self._log(msg)
+            return msg
+        elif event_type == "fertilizer_runoff":
+            count = 0
+            for r in range(GRID_ROWS):
+                for c in range(GRID_COLS):
+                    if self.grid[r][c].cell_type == CELL_INFLOW:
+                        self.grid[r][c].nitrogen   = min(100.0, self.grid[r][c].nitrogen   + 25.0)
+                        self.grid[r][c].phosphorus = min(100.0, self.grid[r][c].phosphorus + 18.0)
+                        count += 1
+            msg = f"🌱 Fertilizer runoff surge at {count} inflow cells!"
+            self._log(msg)
+            return msg
+        return "Unknown event type"
+
     def _random_events(self) -> None:
         """Generate stochastic environmental events each tick."""
-        # Industrial spill
-        if self.flow_config["inflow_east"] and random.random() < SPILL_PROB:
-            # Pick a random east-inflow cell or interior cell near east edge
-            spill_candidates = list(INFLOW_EAST)
-            r, c = random.choice(spill_candidates)
-            self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + SPILL_MAGNITUDE)
-            self._log(f"⚠ Industrial spill event at column {c}!")
+        # Industrial spill — can now happen at ANY active inflow, not just east
+        if random.random() < SPILL_PROB:
+            spill_candidates = [
+                (r, c) for r in range(GRID_ROWS) for c in range(GRID_COLS)
+                if self.grid[r][c].cell_type == CELL_INFLOW
+            ]
+            if spill_candidates:
+                # 65% chance at east (industrial) inflow, 35% at any other inflow
+                east_candidates = [(r, c) for r, c in spill_candidates if c == GRID_COLS - 1]
+                if east_candidates and random.random() < 0.65:
+                    r, c = random.choice(east_candidates)
+                else:
+                    r, c = random.choice(spill_candidates)
+                self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + SPILL_MAGNITUDE)
+                inflow_type = "east industrial" if c == GRID_COLS - 1 else ("north agricultural" if r == 0 else "west river")
+                self._log(f"⚠ Industrial spill at {inflow_type} inflow ({r},{c})!")
 
         # Heavy rainfall event
         if random.random() < HEAVY_RAIN_PROB:

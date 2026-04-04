@@ -29,6 +29,7 @@ import {
   HYPOXIC_DO,
   cellRGB,
   type CellState,
+  type GlobalDrivers,
   type SimulationState,
   ACTION_META,
 } from "../data/types";
@@ -41,13 +42,18 @@ const GRID_COLS = 28;
 const CANVAS_W  = GRID_COLS * CELL_SIZE;   // 952
 const CANVAS_H  = GRID_ROWS * CELL_SIZE;   // 680
 
+// Industrial contamination threshold for the prominent warning visual
+const INDUSTRIAL_WARN = 25.0;
+const INDUSTRIAL_SEVERE = 55.0;
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface GridCanvasProps {
-  state:          SimulationState | null;
-  selectedAction: number;
-  onCellClick:    (row: number, col: number) => void;
-  tickCount:      number;
+  state:           SimulationState | null;
+  selectedAction:  number;
+  onCellClick:     (row: number, col: number) => void;
+  tickCount:       number;
+  containerWidth?: number;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -57,18 +63,53 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
   selectedAction,
   onCellClick,
   tickCount,
+  containerWidth,
 }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef    = useRef<HTMLCanvasElement>(null);
+  const wrapperRef   = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState<{ row: number; col: number } | null>(null);
+  const [wrapperW, setWrapperW] = useState<number>(CANVAS_W);
+
+  // Observe the wrapper's width for responsive scaling
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        setWrapperW(entry.contentRect.width);
+      }
+    });
+    obs.observe(el);
+    setWrapperW(el.clientWidth);
+    return () => obs.disconnect();
+  }, []);
+
+  // Scale the canvas to fit the available width (never upscale beyond 1.0)
+  const scale = Math.min(1.0, (containerWidth ?? wrapperW) / CANVAS_W);
 
   // ── Draw helpers ─────────────────────────────────────────────────────────
 
   const drawGrid = useCallback(
-    (ctx: CanvasRenderingContext2D, grid: CellState[][], tick: number) => {
+    (ctx: CanvasRenderingContext2D, grid: CellState[][], tick: number, drivers?: GlobalDrivers) => {
       ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
-      const pulse     = Math.sin(tick * 0.3) * 0.5 + 0.5;        // 0→1 oscillation
-      const slowPulse = Math.sin(tick * 0.12) * 0.5 + 0.5;       // slower for dead zones
+      const pulse     = Math.sin(tick * 0.3) * 0.5 + 0.5;
+      const slowPulse = Math.sin(tick * 0.12) * 0.5 + 0.5;
+
+      // ── Global event overlays (computed once per frame) ─────────────────
+      const temp        = drivers?.temperature ?? 15;
+      const storm       = drivers?.storm_intensity ?? 0;
+      const rainfall    = drivers?.rainfall ?? 0;
+      const fertUse     = drivers?.fertilizer_use ?? 0;
+
+      // Heat wave: temp > 27°C
+      const heatIntensity   = Math.max(0, Math.min(1, (temp - 27) / 8));
+      // Storm / heavy rain: storm > 0.4
+      const stormIntensity  = Math.max(0, Math.min(1, (storm - 0.4) / 0.6));
+      // Heavy rain glow (rainfall > 0.55)
+      const rainIntensity   = Math.max(0, Math.min(1, (rainfall - 0.55) / 0.45));
+      // Drought: very low rainfall < 0.1
+      const droughtIntensity = Math.max(0, Math.min(1, (0.10 - rainfall) / 0.10));
 
       for (let r = 0; r < grid.length; r++) {
         for (let c = 0; c < grid[r].length; c++) {
@@ -141,29 +182,89 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
             ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
           }
 
+          // ── 6b. Industrial contamination — prominent warning overlay ─────
+          if (cell.cell_type !== CELL_LAND && cell.industrial >= INDUSTRIAL_WARN) {
+            const iNorm = Math.min(1.0, (cell.industrial - INDUSTRIAL_WARN) / (INDUSTRIAL_SEVERE - INDUSTRIAL_WARN));
+            if (cell.industrial >= INDUSTRIAL_SEVERE) {
+              // Severe: bright orange pulsing border + hazard diagonal stripes
+              const a = 0.70 + 0.30 * pulse;
+              ctx.strokeStyle = `rgba(255,140,0,${a})`;
+              ctx.lineWidth   = 2.5;
+              ctx.strokeRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+              // Inner orange-red glow
+              ctx.fillStyle = `rgba(220,80,0,${0.20 + 0.18 * pulse})`;
+              ctx.fillRect(x + 2, y + 2, CELL_SIZE - 4, CELL_SIZE - 4);
+              // Hazard X mark
+              ctx.strokeStyle = `rgba(255,160,0,${0.80 + 0.20 * pulse})`;
+              ctx.lineWidth   = 1.8;
+              ctx.beginPath();
+              ctx.moveTo(x + 5, y + 5);  ctx.lineTo(x + CELL_SIZE - 5, y + CELL_SIZE - 5);
+              ctx.moveTo(x + CELL_SIZE - 5, y + 5); ctx.lineTo(x + 5, y + CELL_SIZE - 5);
+              ctx.stroke();
+            } else {
+              // Moderate: yellow-orange border with opacity proportional to severity
+              ctx.strokeStyle = `rgba(255,180,0,${0.35 + 0.40 * iNorm * pulse})`;
+              ctx.lineWidth   = 1.5;
+              ctx.strokeRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+              ctx.fillStyle   = `rgba(200,100,0,${0.08 + 0.08 * iNorm})`;
+              ctx.fillRect(x + 2, y + 2, CELL_SIZE - 4, CELL_SIZE - 4);
+            }
+            ctx.lineWidth = 1;
+          }
+
           // ── 7. Active intervention ring + centre dot ───────────────────────
           if (cell.active_interventions.length > 0) {
             const aid   = cell.active_interventions[0];
             const meta  = ACTION_META.find(a => a.id === aid);
             const color = meta?.color ?? "#ffffff";
 
-            // Outer ring (subtle glow)
             ctx.strokeStyle = color + "55";
             ctx.lineWidth   = 1;
             ctx.strokeRect(x + 1, y + 1, CELL_SIZE - 2, CELL_SIZE - 2);
 
-            // Centre-right dot
             ctx.beginPath();
             ctx.arc(x + CELL_SIZE - 5, y + 5, 3.5, 0, Math.PI * 2);
             ctx.fillStyle = color;
             ctx.fill();
-            // Glow around dot
             ctx.beginPath();
             ctx.arc(x + CELL_SIZE - 5, y + 5, 5.5, 0, Math.PI * 2);
             ctx.strokeStyle = color + "44";
             ctx.lineWidth   = 1;
             ctx.stroke();
             ctx.lineWidth   = 1;
+          }
+
+          // ── 8. Environmental event overlays (top layer, water cells only) ──
+          if (cell.cell_type !== CELL_LAND) {
+            // Heat wave: warm red-orange shimmer
+            if (heatIntensity > 0) {
+              ctx.fillStyle = `rgba(220,80,20,${0.10 * heatIntensity + 0.06 * heatIntensity * pulse})`;
+              ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+            }
+            // Storm / heavy rain: blue-grey turbid wash + ripple
+            if (stormIntensity > 0) {
+              ctx.fillStyle = `rgba(60,110,180,${0.18 * stormIntensity})`;
+              ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+              // Ripple dot on random-looking cells based on position parity
+              if ((r + c + Math.floor(tick / 4)) % 5 === 0) {
+                ctx.strokeStyle = `rgba(120,180,255,${0.50 * stormIntensity})`;
+                ctx.lineWidth   = 1;
+                ctx.beginPath();
+                ctx.arc(x + CELL_SIZE / 2, y + CELL_SIZE / 2, 4 + 2 * pulse, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.lineWidth = 1;
+              }
+            }
+            // Heavy rainfall: blue tint + droplet shimmer
+            if (rainIntensity > 0 && stormIntensity === 0) {
+              ctx.fillStyle = `rgba(30,80,180,${0.10 * rainIntensity + 0.05 * rainIntensity * pulse})`;
+              ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+            }
+            // Drought: yellow-brown desiccation tint (concentrated look)
+            if (droughtIntensity > 0) {
+              ctx.fillStyle = `rgba(160,110,20,${0.12 * droughtIntensity})`;
+              ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+            }
           }
         }
       }
@@ -207,7 +308,7 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    drawGrid(ctx, state.grid, tickCount);
+    drawGrid(ctx, state.grid, tickCount, state.drivers);
     if (hovered) {
       drawHover(ctx, hovered.row, hovered.col, selectedAction);
     }
@@ -217,8 +318,9 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
 
   const getCellFromEvent = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
-    const col  = Math.floor((e.clientX - rect.left)  / CELL_SIZE);
-    const row  = Math.floor((e.clientY - rect.top)   / CELL_SIZE);
+    // Divide by scale to map from displayed coords back to canvas coords
+    const col  = Math.floor((e.clientX - rect.left)  / (CELL_SIZE * scale));
+    const row  = Math.floor((e.clientY - rect.top)   / (CELL_SIZE * scale));
     return { row, col };
   };
 
@@ -250,50 +352,58 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
 
   // ─────────────────────────────────────────────────────────────────────────
 
-  return (
-    <div className="relative inline-block select-none">
-      {/* Canvas with drop-shadow for depth */}
-      <canvas
-        ref={canvasRef}
-        width={CANVAS_W}
-        height={CANVAS_H}
-        className="block cursor-crosshair"
-        style={{
-          borderRadius:    6,
-          border:          "1px solid #1e3a5f",
-          boxShadow:       "0 0 0 1px #0d1b2e, 0 8px 32px rgba(0,0,0,0.6), 0 0 20px rgba(10,30,70,0.4)",
-          imageRendering:  "pixelated",
-        }}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-        onClick={handleClick}
-      />
+  // Scaled display dimensions
+  const displayW = Math.round(CANVAS_W * scale);
+  const displayH = Math.round(CANVAS_H * scale);
 
-      {/* Tooltip */}
-      {tooltipCell && tooltipCell.cell_type !== CELL_LAND && (
-        <div
-          className="absolute z-10 pointer-events-none bg-[#070f1d]/96 border border-[#1e3a5f]
-                     rounded-lg px-2.5 py-2 text-xs text-gray-300 min-w-[172px] backdrop-blur-sm"
+  return (
+    <div ref={wrapperRef} className="w-full select-none" style={{ maxWidth: CANVAS_W }}>
+      {/* Outer box sets the visible (scaled) size so layout respects it */}
+      <div className="relative" style={{ width: displayW, height: displayH }}>
+        <canvas
+          ref={canvasRef}
+          width={CANVAS_W}
+          height={CANVAS_H}
+          className="block cursor-crosshair"
           style={{
-            left: tooltipLeft > CANVAS_W - 200 ? tooltipLeft - 200 : tooltipLeft,
-            top:  tooltipTop  > CANVAS_H - 160 ? tooltipTop  - 150 : tooltipTop,
-            boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+            width:          displayW,
+            height:         displayH,
+            borderRadius:   6,
+            border:         "1px solid #1e3a5f",
+            boxShadow:      "0 0 0 1px #0d1b2e, 0 8px 32px rgba(0,0,0,0.6), 0 0 20px rgba(10,30,70,0.4)",
+            imageRendering: "pixelated",
           }}
-        >
-          <div className="font-semibold text-white mb-1.5 text-[11px]">
-            ({hovered!.row},{hovered!.col}) — {cellTypeName(tooltipCell.cell_type)}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+          onClick={handleClick}
+        />
+
+        {/* Tooltip — positioned in scaled space */}
+        {tooltipCell && tooltipCell.cell_type !== CELL_LAND && (
+          <div
+            className="absolute z-10 pointer-events-none bg-[#070f1d]/96 border border-[#1e3a5f]
+                       rounded-lg px-2.5 py-2 text-xs text-gray-300 min-w-[172px] backdrop-blur-sm"
+            style={{
+              left: (tooltipLeft * scale) > displayW - 200 ? (tooltipLeft * scale) - 200 : (tooltipLeft * scale),
+              top:  (tooltipTop  * scale) > displayH - 160 ? (tooltipTop  * scale) - 150 : (tooltipTop  * scale),
+              boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+            }}
+          >
+            <div className="font-semibold text-white mb-1.5 text-[11px]">
+              ({hovered!.row},{hovered!.col}) — {cellTypeName(tooltipCell.cell_type)}
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <TooltipRow label="Algae"      value={tooltipCell.algae}            warn={tooltipCell.algae >= BLOOM_THRESHOLD} />
+              <TooltipRow label="DO"         value={tooltipCell.dissolved_oxygen}  warn={tooltipCell.dissolved_oxygen <= HYPOXIC_DO} />
+              <TooltipRow label="Nitrogen"   value={tooltipCell.nitrogen} />
+              <TooltipRow label="Phosphorus" value={tooltipCell.phosphorus} />
+              <TooltipRow label="Sediment"   value={tooltipCell.sediment} />
+              <TooltipRow label="Industrial" value={tooltipCell.industrial}        warn={tooltipCell.industrial > 25} />
+              <TooltipRow label="Biodiver."  value={tooltipCell.biodiversity} />
+            </div>
           </div>
-          <div className="flex flex-col gap-0.5">
-            <TooltipRow label="Algae"      value={tooltipCell.algae}           warn={tooltipCell.algae >= BLOOM_THRESHOLD} />
-            <TooltipRow label="DO"         value={tooltipCell.dissolved_oxygen} warn={tooltipCell.dissolved_oxygen <= HYPOXIC_DO} />
-            <TooltipRow label="Nitrogen"   value={tooltipCell.nitrogen} />
-            <TooltipRow label="Phosphorus" value={tooltipCell.phosphorus} />
-            <TooltipRow label="Sediment"   value={tooltipCell.sediment} />
-            <TooltipRow label="Industrial" value={tooltipCell.industrial}       warn={tooltipCell.industrial > 30} />
-            <TooltipRow label="Biodiver."  value={tooltipCell.biodiversity} />
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

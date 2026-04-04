@@ -38,6 +38,20 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 
 export type AgentType = "heuristic" | "llm" | "rl";
 
+export type EventType = "industrial_spill" | "heavy_rain" | "heat_wave" | "drought" | "fertilizer_runoff";
+
+export interface ExternalDataPayload {
+  temperature?:     number;
+  rainfall?:        number;
+  storm_intensity?: number;
+  fertilizer_use?:  number;
+  avg_nitrogen?:    number;
+  avg_phosphorus?:  number;
+  avg_do?:          number;
+  industrial_load?: number;
+  source?:          string;
+}
+
 export interface RLStats {
   epsilon:           number;
   q_table_size:      number;
@@ -72,9 +86,11 @@ export interface UseSimulationReturn {
   updateDrivers:   (partial: Partial<GlobalDrivers>) => Promise<void>;
   updateFlows:     (partial: Partial<FlowConfig>) => Promise<void>;
   applyFlowPreset: (preset: FlowPreset) => Promise<void>;
-  runAgentStep:    (agentType: AgentType) => Promise<void>;
-  runAgentAuto:    (agentType: AgentType, n?: number) => Promise<void>;
-  exportSession:   () => Promise<void>;
+  runAgentStep:      (agentType: AgentType) => Promise<void>;
+  runAgentAuto:      (agentType: AgentType, n?: number) => Promise<void>;
+  exportSession:     () => Promise<void>;
+  triggerEvent:      (eventType: EventType) => Promise<void>;
+  applyExternalData: (payload: ExternalDataPayload) => Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -323,6 +339,32 @@ export function useSimulation(): UseSimulationReturn {
     }
   }, []);
 
+  // ── Trigger manual event ─────────────────────────────────────────────────
+  const triggerEvent = useCallback(async (eventType: EventType) => {
+    try {
+      const result = await apiPost<{ message: string; state: StateWithHistory }>(
+        "/api/event",
+        { event_type: eventType },
+      );
+      applyStateUpdate(result.state, setState, setHealthHistory);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  // ── Apply external data (USGS / NASA) ────────────────────────────────────
+  const applyExternalData = useCallback(async (payload: ExternalDataPayload) => {
+    try {
+      const result = await apiPost<{ message: string; state: StateWithHistory }>(
+        "/api/external_data",
+        payload,
+      );
+      applyStateUpdate(result.state, setState, setHealthHistory);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   // ── Export session ────────────────────────────────────────────────────────
   const exportSession = useCallback(async () => {
     try {
@@ -372,5 +414,7 @@ export function useSimulation(): UseSimulationReturn {
     runAgentStep,
     runAgentAuto,
     exportSession,
+    triggerEvent,
+    applyExternalData,
   };
 }

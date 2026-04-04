@@ -74,18 +74,34 @@ def inflow_nutrients(
     cell.phosphorus = min(100.0, cell.phosphorus + p_in_eff)
     cell.sediment   = min(100.0, cell.sediment   + s_in_eff)
 
-    # Spread a portion of the already-intercepted inflow loads into adjacent
-    # water so the impact is not confined to the edge channel alone.
-    neighbor_fraction = 0.20
+    # Spread inflow loads into adjacent and second-ring water cells.
+    # Higher neighbor_fraction = more realistic nutrient plume from inflow.
+    neighbor_fraction = 0.50
+    second_ring_fraction = 0.20
+    rows_count = len(grid)
+    cols_count = len(grid[0]) if rows_count else 0
+
     for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
         nr, nc = row + dr, col + dc
-        if 0 <= nr < len(grid) and 0 <= nc < len(grid[0]):
+        if 0 <= nr < rows_count and 0 <= nc < cols_count:
             nbr = grid[nr][nc]
             if nbr.cell_type == CELL_LAND:
                 continue
             nbr.nitrogen   = min(100.0, nbr.nitrogen   + n_in_eff * neighbor_fraction)
             nbr.phosphorus = min(100.0, nbr.phosphorus + p_in_eff * neighbor_fraction)
             nbr.sediment   = min(100.0, nbr.sediment   + s_in_eff * neighbor_fraction)
+            # Second-ring spread (cells 2 steps from inflow)
+            for dr2, dc2 in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nr2, nc2 = nr + dr2, nc + dc2
+                if (nr2, nc2) == (row, col):
+                    continue
+                if 0 <= nr2 < rows_count and 0 <= nc2 < cols_count:
+                    nbr2 = grid[nr2][nc2]
+                    if nbr2.cell_type == CELL_LAND:
+                        continue
+                    nbr2.nitrogen   = min(100.0, nbr2.nitrogen   + n_in_eff * second_ring_fraction)
+                    nbr2.phosphorus = min(100.0, nbr2.phosphorus + p_in_eff * second_ring_fraction)
+                    nbr2.sediment   = min(100.0, nbr2.sediment   + s_in_eff * second_ring_fraction * 0.5)
 
     # East inflow: industrial discharge
     if (row, col) in INFLOW_EAST_SET:
@@ -250,9 +266,17 @@ def spread_algae(grid: List[List[CellState]]) -> None:
     """
     Diffuse algal biomass to 4-connected water neighbours.
     Uses a two-buffer approach to avoid race conditions.
+    Applies a directional bias towards the outflow (south edge) to simulate
+    realistic downstream transport of algae and pollutants.
     """
     rows = len(grid)
     cols = len(grid[0]) if rows else 0
+
+    # Directional flow bias constants
+    # South (towards outflow at row 19) gets a higher weight
+    SOUTH_BIAS = 1.6   # weight for downward (southward) spread
+    NORTH_BIAS = 0.6   # weight for upward (away from outflow) spread
+    LATERAL_BIAS = 1.0 # east/west spread unchanged
 
     # Buffers for delta values
     delta = [[0.0] * cols for _ in range(rows)]
@@ -267,31 +291,96 @@ def spread_algae(grid: List[List[CellState]]) -> None:
             for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
                 nr, nc = r + dr, c + dc
                 if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc].cell_type != CELL_LAND:
-                    water_nbrs.append((nr, nc))
+                    water_nbrs.append((nr, nc, dr, dc))
 
             if not water_nbrs:
                 continue
 
             # Amount leaving this cell (less if high flow — faster flushing removes algae)
-            # Low-biomass but nutrient-rich cells can still seed a small amount of
-            # algae outward, so a cleared patch can re-colonise its neighbours.
             nutrient_seed = 0.0
             if cell.algae < 5.0:
                 nutrient_seed = max(0.0, (cell.nitrogen / 50.0) + (cell.phosphorus / 25.0) - 0.4)
 
             spread_source = cell.algae + (nutrient_seed * 3.0)
             spread_out = ALGAE_SPREAD_RATE * spread_source * max(0.1, 1.0 - 0.4 * cell.flow)
-            per_nbr    = spread_out / len(water_nbrs)
 
+            # Compute directional weights for each neighbour
+            weights = []
+            for nr, nc, dr, dc in water_nbrs:
+                if dr == 1:        # south — towards outflow
+                    w = SOUTH_BIAS
+                elif dr == -1:     # north — away from outflow
+                    w = NORTH_BIAS
+                else:              # east / west
+                    w = LATERAL_BIAS
+                weights.append(w)
+
+            total_weight = sum(weights)
             delta[r][c] -= spread_out
-            for nr, nc in water_nbrs:
-                delta[nr][nc] += per_nbr
+            for (nr, nc, _dr, _dc), w in zip(water_nbrs, weights):
+                delta[nr][nc] += spread_out * (w / total_weight)
 
     # Apply deltas
     for r in range(rows):
         for c in range(cols):
             if grid[r][c].cell_type != CELL_LAND:
                 grid[r][c].algae = max(0.0, min(100.0, grid[r][c].algae + delta[r][c]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8b. INDUSTRIAL SPREAD (separate pass — mirrors algae spread logic)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def spread_industrial(grid: List[List[CellState]]) -> None:
+    """
+    Diffuse industrial pollution to neighbouring water cells.
+    Biased towards outflow (south) to simulate downstream transport.
+    Spread rate is slower than algae (pollution is denser / settles).
+    """
+    rows = len(grid)
+    cols = len(grid[0]) if rows else 0
+
+    INDUSTRIAL_SPREAD_RATE = 0.06
+    SOUTH_BIAS   = 1.7
+    NORTH_BIAS   = 0.5
+    LATERAL_BIAS = 1.0
+
+    delta = [[0.0] * cols for _ in range(rows)]
+
+    for r in range(rows):
+        for c in range(cols):
+            cell = grid[r][c]
+            if cell.cell_type == CELL_LAND or cell.industrial < 1.0:
+                continue
+
+            water_nbrs = []
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc].cell_type != CELL_LAND:
+                    water_nbrs.append((nr, nc, dr, dc))
+
+            if not water_nbrs:
+                continue
+
+            spread_out = INDUSTRIAL_SPREAD_RATE * cell.industrial * max(0.1, 1.0 - 0.3 * cell.flow)
+            weights = []
+            for _nr, _nc, dr, dc in water_nbrs:
+                if dr == 1:
+                    weights.append(SOUTH_BIAS)
+                elif dr == -1:
+                    weights.append(NORTH_BIAS)
+                else:
+                    weights.append(LATERAL_BIAS)
+
+            total_weight = sum(weights)
+            delta[r][c] -= spread_out
+            for (nr, nc, _dr, _dc), w in zip(water_nbrs, weights):
+                delta[nr][nc] += spread_out * (w / total_weight)
+
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c].cell_type != CELL_LAND:
+                grid[r][c].industrial = max(0.0, min(100.0, grid[r][c].industrial + delta[r][c]))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -355,8 +444,9 @@ def full_physics_step(
             decay_industrial(cell)
             cell.clamp()
 
-    # Spread is a separate two-buffer pass
+    # Spread passes (two-buffer approach prevents race conditions)
     spread_algae(grid)
+    spread_industrial(grid)
 
     # Tick intervention timers
     for r in range(rows):
