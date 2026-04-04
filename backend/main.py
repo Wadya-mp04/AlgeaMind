@@ -11,8 +11,10 @@ POST /api/step            → advance one tick
 POST /api/reset           → reset to initial eutrophic state
 POST /api/action          → apply intervention + step
 POST /api/drivers         → update environmental drivers
-POST /api/agent/step      → run one agent step (heuristic or llm)
+POST /api/agent/step      → run one agent step (heuristic | llm | rl)
+POST /api/agent/auto      → run N agent steps
 GET  /api/agent/brief     → get LLM agent research brief
+GET  /api/export          → download full session log as JSON
 GET  /api/health          → liveness probe
 """
 from __future__ import annotations
@@ -30,6 +32,7 @@ load_dotenv()
 from simulation.environment import GridEnvironment
 from agent.heuristic_agent import HeuristicAgent
 from agent.llm_agent import LLMAgent
+from agent.rl_agent import RLAgent
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Application setup
@@ -38,12 +41,12 @@ from agent.llm_agent import LLMAgent
 app = FastAPI(
     title="AlgaeMind Simulation API",
     description="2D grid simulation for Harmful Algal Bloom mitigation.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # dev: allow all; restrict in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,6 +59,7 @@ app.add_middleware(
 env             = GridEnvironment()
 heuristic_agent = HeuristicAgent()
 llm_agent       = LLMAgent()
+rl_agent        = RLAgent()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Request / Response models
@@ -76,7 +80,7 @@ class DriversRequest(BaseModel):
 
 
 class AgentStepRequest(BaseModel):
-    agent_type: Literal["heuristic", "llm"] = "heuristic"
+    agent_type: Literal["heuristic", "llm", "rl"] = "heuristic"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -106,8 +110,9 @@ def step_simulation() -> Dict[str, Any]:
 def reset_simulation() -> Dict[str, Any]:
     """Reset the simulation to initial eutrophic state."""
     env.reset()
-    heuristic_agent.__init__()   # reset cycle counter
-    llm_agent.__init__()         # reset research brief
+    heuristic_agent.__init__()
+    llm_agent.__init__()
+    rl_agent.__init__()
     return env.get_state()
 
 
@@ -134,13 +139,14 @@ def update_drivers(req: DriversRequest) -> Dict[str, Any]:
 def agent_step(req: AgentStepRequest) -> Dict[str, Any]:
     """
     Let the selected agent choose and apply one intervention, then step.
-
     Returns the chosen action metadata alongside the new simulation state.
     """
     obs = env.get_agent_observation()
 
     if req.agent_type == "llm":
         action = llm_agent.select_action(obs)
+    elif req.agent_type == "rl":
+        action = rl_agent.select_action(obs)
     else:
         action = heuristic_agent.select_action(obs)
 
@@ -151,6 +157,7 @@ def agent_step(req: AgentStepRequest) -> Dict[str, Any]:
         "action": action,
         "state":  state,
         "brief":  llm_agent.brief if req.agent_type == "llm" else None,
+        "rl_stats": action.get("rl_stats") if req.agent_type == "rl" else None,
     }
 
 
@@ -169,6 +176,8 @@ def agent_auto_steps(
         obs = env.get_agent_observation()
         if req.agent_type == "llm":
             action = llm_agent.select_action(obs)
+        elif req.agent_type == "rl":
+            action = rl_agent.select_action(obs)
         else:
             action = heuristic_agent.select_action(obs)
         env.apply_action(action["action_id"], action["row"], action["col"])
@@ -176,10 +185,11 @@ def agent_auto_steps(
 
     state = env.get_state()
     return {
-        "action": last_action,
-        "state":  state,
+        "action":    last_action,
+        "state":     state,
         "steps_run": n,
-        "brief": llm_agent.brief if req.agent_type == "llm" else None,
+        "brief":     llm_agent.brief if req.agent_type == "llm" else None,
+        "rl_stats":  last_action.get("rl_stats") if req.agent_type == "rl" and last_action else None,
     }
 
 
@@ -187,6 +197,40 @@ def agent_auto_steps(
 def get_agent_brief() -> Dict[str, str]:
     """Return the LLM agent's current research brief."""
     return {"brief": llm_agent.brief}
+
+
+@app.get("/api/agent/rl_stats")
+def get_rl_stats() -> Dict[str, Any]:
+    """Return the RL agent's current training statistics."""
+    return {
+        "epsilon":           round(rl_agent.epsilon, 3),
+        "q_table_size":      len(rl_agent.q_table),
+        "total_steps":       rl_agent.total_steps,
+        "cumulative_reward": round(rl_agent.cumulative_reward, 1),
+    }
+
+
+@app.get("/api/export")
+def export_session() -> Dict[str, Any]:
+    """
+    Export the full current session as a JSON blob.
+    Includes simulation state, health history, event log, and intervention log.
+    """
+    state = env.get_state()
+    return {
+        "export_version":    "1.1",
+        "timestep":          env.drivers.timestep,
+        "current_state":     state,
+        "health_history":    env._health_history,
+        "all_events":        list(env._recent_events),
+        "all_interventions": list(env._recent_interventions),
+        "rl_stats": {
+            "epsilon":           round(rl_agent.epsilon, 3),
+            "q_table_size":      len(rl_agent.q_table),
+            "total_steps":       rl_agent.total_steps,
+            "cumulative_reward": round(rl_agent.cumulative_reward, 1),
+        },
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
