@@ -19,14 +19,18 @@ import type {
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
 
+// In production (Vercel), set VITE_API_URL to your deployed backend URL.
+// In local dev the Vite proxy forwards /api → localhost:8001.
+const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "";
+
 async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await fetch(API_BASE + path);
   if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
   return res.json();
 }
 
 async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(API_BASE + path, {
     method: "POST",
     headers: body !== undefined ? { "Content-Type": "application/json" } : {},
     body: body !== undefined ? JSON.stringify(body) : undefined,
