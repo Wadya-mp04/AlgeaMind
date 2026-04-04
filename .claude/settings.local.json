@@ -3,7 +3,8 @@
     "allow": [
       "WebFetch(domain:devpost.com)",
       "Bash(npm install:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "WebSearch"
     ]
   }
 }

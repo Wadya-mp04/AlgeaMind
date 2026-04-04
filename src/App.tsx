@@ -30,6 +30,7 @@ import { AgentPanel }    from "./components/AgentPanel";
 import { ControlPanel }  from "./components/ControlPanel";
 import { StatsPanel }    from "./components/StatsPanel";
 import { ActivityLog }   from "./components/ActivityLog";
+import { Dashboard }     from "./components/Dashboard";
 import { useSimulation } from "./hooks/useSimulation";
 import { healthColor, ACTION_META } from "./data/types";
 
@@ -67,6 +68,7 @@ export default function App() {
   } = useSimulation();
 
   const [selectedAction, setSelectedAction] = useState(4);
+  const [centerTab, setCenterTab] = useState<"sim" | "dashboard">("sim");
   const tickRef       = useRef(0);
   const [tickCount,   setTickCount]   = useState(0);
   const layoutRef     = useRef<HTMLDivElement>(null);
@@ -189,11 +191,11 @@ export default function App() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Waves size={18} className="text-[#4a9eff]" />
-            <span className="text-base font-bold tracking-tight">AlgaeMind</span>
+            <span className="text-base font-bold tracking-tight">TrackAlgae</span>
           </div>
-          <Tooltip text="AI-powered sandbox for simulating and mitigating Harmful Algal Blooms in freshwater lakes">
+          <Tooltip text="Simulation tool for tracking and mitigating Harmful Algal Blooms in freshwater lakes">
             <span className="text-xs text-gray-500 border border-[#1e3a5f] px-2 py-0.5 rounded hidden md:inline cursor-help">
-              AI Sandbox · HAB Mitigation
+              HAB Simulation · Mitigation
             </span>
           </Tooltip>
           <Tooltip text="Current season affects temperature, algae growth rates, and biodiversity targets">
@@ -287,82 +289,94 @@ export default function App() {
             <div className="h-full w-px mx-auto bg-[#1a3050] group-hover:bg-[#4a9eff] transition-colors" />
           </div>
 
-          {/* ── Center: map + action bar + stats below ─────────────────────── */}
+          {/* ── Center: tab bar + content ──────────────────────────────────── */}
           <main ref={centerRef} className="min-h-0 flex-1 flex flex-col gap-2 overflow-hidden px-2">
 
-            {/* Map card — constrained so StatsPanel is always visible */}
-            <div
-              className="flex-shrink-0 rounded-lg border border-[#1a3050] bg-[#071224] flex flex-col min-h-0 overflow-hidden"
-              style={{ height: mapHeight }}
-            >
-              {/* Map header row */}
-              <div className="flex items-center justify-between px-2 pt-0 mb-0">
-                <span className="text-xs font-semibold text-gray-400">28×20 · ~50 m²/cell · click to intervene</span>
-                {/* Compact inline legend */}
-                <div className="flex flex-wrap justify-end gap-x-3 gap-y-0.5 text-[10px] text-gray-500">
-                  <LegendItem color="rgb(15,38,82)"    label="Water"       tip="Clean water — healthy DO, low algae" />
-                  <LegendItem color="rgb(22,90,25)"    label="Bloom ≥35"   tip="Cyanobacteria bloom — oxygen stress beginning" />
-                  <LegendItem color="rgb(70,190,10)"   label="Severe ≥65"  tip="Dense surface scum — severe oxygen crash risk" />
-                  <LegendItem color="rgb(200,80,0)"    label="Industrial"  tip="Industrial pollution: chemicals/metals from east discharge. Orange border = moderate spill, Red X = severe" />
-                  <LegendItem color="rgb(75,55,12)"    label="Sediment"    tip="Storm runoff turbidity — reduces light and photosynthesis" />
-                  <LegendItem color="rgb(5,5,15)"      label="Dead zone"   tip="DO ≤ 5 — anoxic, no aerobic life survives. Red X animated." />
-                  <LegendItem color="rgba(80,170,255,0.75)" label="▶ Inflow" tip="North=agricultural, West=river, East=industrial discharge" />
-                </div>
-              </div>
+            {/* Tab switcher */}
+            <div className="flex-shrink-0 flex items-center gap-1 border-b border-[#1a3050] pb-1">
+              <TabBtn label="Simulation" active={centerTab === "sim"}   onClick={() => setCenterTab("sim")} />
+              <TabBtn label="Dashboard"  active={centerTab === "dashboard"} onClick={() => setCenterTab("dashboard")} />
+            </div>
 
-              <div className="flex-1 min-h-0">
-                <GridCanvas
-                  state={state}
-                  selectedAction={selectedAction}
-                  onCellClick={handleCellClick}
-                  tickCount={tickCount}
-                  containerWidth={centerWidth > 0 ? centerWidth - 4 : undefined}
-                  containerHeight={mapCanvasHeight}
-                />
-              </div>
-
-              {/* Intervention selector bar */}
-              <div className="mt-1.5 px-2 pb-2 flex flex-wrap gap-1 items-center bg-[#071224]">
-                {ACTION_META.map(action => (
-                  <Tooltip key={action.id}
-                           text={`${action.description} | Cost: ${action.cost}${action.duration > 0 ? ` | ${action.duration}t (~${Math.round(action.duration * 6)}h)` : " | Instant"} | r=${action.radius}`}>
-                    <button
-                      onClick={() => setSelectedAction(action.id)}
-                      className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium border transition-colors ${
-                        selectedAction === action.id
-                          ? "border-[#4a9eff]/60 text-white"
-                          : "border-transparent text-gray-500 hover:text-gray-300 hover:bg-[#0a1628]"
-                      }`}
-                      style={selectedAction === action.id ? { backgroundColor: action.color + "25", borderColor: action.color + "80" } : {}}
-                    >
-                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: action.color }} />
-                      <span className="truncate max-w-[90px]">{action.name}</span>
-                      <span className="text-gray-600 text-[10px] ml-0.5">¢{action.cost}</span>
-                    </button>
-                  </Tooltip>
-                ))}
-                {deadZones > 10 && (
-                  <div className="flex items-center gap-1 bg-red-900/20 border border-red-800/40 rounded px-2 py-1 text-[11px] text-red-300 ml-auto">
-                    <AlertTriangle size={11} className="flex-shrink-0" />
-                    <strong>CRISIS:</strong>&nbsp;{deadZones} dead zones — Aerate!
+            {centerTab === "sim" ? (
+              <>
+                {/* Map card — constrained so StatsPanel is always visible */}
+                <div
+                  className="flex-shrink-0 rounded-lg border border-[#1a3050] bg-[#071224] flex flex-col min-h-0 overflow-hidden"
+                  style={{ height: mapHeight }}
+                >
+                  {/* Map header row */}
+                  <div className="flex items-center justify-between px-2 pt-0 mb-0">
+                    <span className="text-xs font-semibold text-gray-400">28×20 · ~50 m²/cell · click to intervene</span>
+                    {/* Compact inline legend */}
+                    <div className="flex flex-wrap justify-end gap-x-3 gap-y-0.5 text-[10px] text-gray-500">
+                      <LegendItem color="rgb(15,38,82)"    label="Water"       tip="Clean water — healthy DO, low algae" />
+                      <LegendItem color="rgb(22,90,25)"    label="Bloom ≥35"   tip="Cyanobacteria bloom — oxygen stress beginning" />
+                      <LegendItem color="rgb(70,190,10)"   label="Severe ≥65"  tip="Dense surface scum — severe oxygen crash risk" />
+                      <LegendItem color="rgb(200,80,0)"    label="Industrial"  tip="Industrial pollution: chemicals/metals from east discharge." />
+                      <LegendItem color="rgb(5,5,15)"      label="Dead zone"   tip="DO ≤ 5 — anoxic. Red X animated." />
+                      <LegendItem color="rgba(80,170,255,0.75)" label="▶ Inflow" tip="North=agricultural, West=river, East=industrial discharge" />
+                    </div>
                   </div>
-                )}
+
+                  <div className="flex-1 min-h-0">
+                    <GridCanvas
+                      state={state}
+                      selectedAction={selectedAction}
+                      onCellClick={handleCellClick}
+                      tickCount={tickCount}
+                      containerWidth={centerWidth > 0 ? centerWidth - 4 : undefined}
+                      containerHeight={mapCanvasHeight}
+                    />
+                  </div>
+
+                  {/* Intervention selector bar */}
+                  <div className="mt-1.5 px-2 pb-2 flex flex-wrap gap-1 items-center bg-[#071224]">
+                    {ACTION_META.map(action => (
+                      <Tooltip key={action.id}
+                               text={`${action.description} | Cost: ${action.cost}${action.duration > 0 ? ` | ${action.duration}t (~${Math.round(action.duration * 6)}h)` : " | Instant"} | r=${action.radius}`}>
+                        <button
+                          onClick={() => setSelectedAction(action.id)}
+                          className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium border transition-colors ${
+                            selectedAction === action.id
+                              ? "text-white border-[#2a3f5f] bg-[#0d1f35]"
+                              : "border-transparent text-gray-500 hover:text-gray-300 hover:bg-[#0a1628]"
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: action.color }} />
+                          <span className="truncate max-w-[90px]">{action.name}</span>
+                          <span className="text-gray-600 text-[10px] ml-0.5">¢{action.cost}</span>
+                        </button>
+                      </Tooltip>
+                    ))}
+                    {deadZones > 10 && (
+                      <div className="flex items-center gap-1 bg-red-900/20 border border-red-800/40 rounded px-2 py-1 text-[11px] text-red-300 ml-auto">
+                        <AlertTriangle size={11} className="flex-shrink-0" />
+                        <strong>CRISIS:</strong>&nbsp;{deadZones} dead zones — Aerate!
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Stats panel below map */}
+                <div
+                  role="separator"
+                  aria-orientation="horizontal"
+                  onMouseDown={() => setIsResizing("center")}
+                  className="h-2 flex-shrink-0 cursor-row-resize group"
+                >
+                  <div className="w-full h-px my-[3px] bg-[#1a3050] group-hover:bg-[#4a9eff] transition-colors" />
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-[#1e3a5f] bg-[#0d1b2e] p-2">
+                  <StatsPanel state={state} healthHistory={healthHistory} />
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 min-h-0 rounded-lg border border-[#1e3a5f] bg-[#0d1b2e] overflow-hidden">
+                <Dashboard state={state} healthHistory={healthHistory} />
               </div>
-            </div>
-
-            {/* Stats panel below map */}
-            <div
-              role="separator"
-              aria-orientation="horizontal"
-              onMouseDown={() => setIsResizing("center")}
-              className="h-2 flex-shrink-0 cursor-row-resize group"
-            >
-              <div className="w-full h-px my-[3px] bg-[#1a3050] group-hover:bg-[#4a9eff] transition-colors" />
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-[#1e3a5f] bg-[#0d1b2e] p-2">
-              <StatsPanel state={state} healthHistory={healthHistory} />
-            </div>
+            )}
           </main>
 
           <div
@@ -506,4 +520,19 @@ const MetricPill: React.FC<{ label: string; value: string; color: string }> = ({
 
 const Divider: React.FC = () => (
   <span className="text-[#1a3050] text-xs select-none">|</span>
+);
+
+const TabBtn: React.FC<{ label: string; active: boolean; onClick: () => void }> = ({
+  label, active, onClick,
+}) => (
+  <button
+    onClick={onClick}
+    className={`px-3 py-1 text-xs font-medium rounded transition-colors border ${
+      active
+        ? "border-[#2a3f5f] bg-[#0d1f35] text-gray-200"
+        : "border-transparent text-gray-500 hover:text-gray-300"
+    }`}
+  >
+    {label}
+  </button>
 );

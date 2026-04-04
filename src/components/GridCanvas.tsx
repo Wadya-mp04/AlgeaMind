@@ -29,6 +29,7 @@ import {
   HYPOXIC_DO,
   cellRGB,
   type CellState,
+  type EventMarker,
   type GlobalDrivers,
   type SimulationState,
   ACTION_META,
@@ -47,6 +48,8 @@ const INDUSTRIAL_WARN = 25.0;
 const INDUSTRIAL_SEVERE = 55.0;
 
 // ─── Props ────────────────────────────────────────────────────────────────────
+
+const MARKER_FADE_TICKS = 22;   // ticks until a marker fully fades
 
 interface GridCanvasProps {
   state:           SimulationState | null;
@@ -319,6 +322,37 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
     drawGrid(ctx, state.grid, tickCount, state.drivers);
     if (hovered) {
       drawHover(ctx, hovered.row, hovered.col, selectedAction);
+    }
+    // Draw fading event / intervention markers
+    const currentTimestep = state.timestep;
+    for (const m of (state.event_markers ?? [])) {
+      const age = currentTimestep - m.timestep;
+      if (age >= MARKER_FADE_TICKS) continue;
+      const alpha = 1 - age / MARKER_FADE_TICKS;
+      const x = m.col * CELL_SIZE + CELL_SIZE / 2;
+      const y = m.row * CELL_SIZE + CELL_SIZE / 2;
+
+      // Outer ring
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.strokeStyle = m.color + Math.round(alpha * 200).toString(16).padStart(2, "0");
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Inner filled dot
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = m.color + Math.round(alpha * 255).toString(16).padStart(2, "0");
+      ctx.fill();
+
+      // Label (only while fairly fresh)
+      if (age < MARKER_FADE_TICKS * 0.65 && m.label) {
+        ctx.font = "bold 7px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = `rgba(255,255,255,${alpha * 0.9})`;
+        ctx.fillText(m.label.slice(0, 5), x, y - 13);
+      }
+      ctx.lineWidth = 1;
     }
   }, [state, tickCount, hovered, selectedAction, drawGrid, drawHover]);
 

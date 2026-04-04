@@ -1,5 +1,5 @@
 """
-GridEnvironment — the core AlgaeMind 2D simulation environment.
+GridEnvironment — the core TrackAlgae 2D simulation environment.
 
 Represents a lake / reservoir divided into a GRID_ROWS × GRID_COLS grid.
 Each cell holds its own water-quality state; global drivers (temperature,
@@ -65,6 +65,7 @@ class GridEnvironment:
         self._health_history: List[float] = []
         self._season_tick_counter: int = 0
         self.external_data_context: Dict[str, Any] = {}  # real-world data for LLM agent
+        self._event_markers: List[Dict] = []  # short-lived markers for grid overlay
         self.reset()
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -91,10 +92,22 @@ class GridEnvironment:
         self._recent_interventions = []
         self._health_history = []
         self._season_tick_counter = 0
+        self._event_markers = []
+
+    def _add_marker(self, row: int, col: int, kind: str, color: str, label: str) -> None:
+        """Add a short-lived visual marker for the grid overlay."""
+        self._event_markers.append({
+            "timestep": self.drivers.timestep,
+            "row": row, "col": col,
+            "kind": kind, "color": color, "label": label,
+        })
+        if len(self._event_markers) > 50:
+            self._event_markers = self._event_markers[-50:]
 
     def step(self) -> None:
         """Advance the simulation by one tick."""
         full_physics_step(self.grid, self.drivers, self.contaminant_config)
+        self._natural_background_events()
         self._random_events()
         self._season_tick_counter += 1
         if self._season_tick_counter >= 120:
@@ -118,7 +131,9 @@ class GridEnvironment:
             return
         name  = ACTION_NAMES[action_id]
         cost  = ACTION_COSTS[action_id]
+        color = ACTION_COLORS.get(action_id, "#ffffff")
         self._dispatch_action(action_id, row, col)
+        self._add_marker(row, col, f"action_{action_id}", color, name[:6])
         self._log(f"▶ {name} applied at ({row},{col}).")
         self._recent_interventions.append({
             "timestep":    self.drivers.timestep,
@@ -216,6 +231,7 @@ class GridEnvironment:
             "recent_events":         list(self._recent_events[-20:]),
             "recent_interventions":  list(self._recent_interventions[-10:]),
             "health_history":        list(self._health_history[-100:]),
+            "event_markers":         list(self._event_markers[-40:]),
         }
 
     def get_agent_observation(self) -> Dict[str, Any]:
@@ -478,10 +494,24 @@ class GridEnvironment:
                 r, c = random.choice(east)
             else:
                 r, c = random.choice(spill_candidates)
-            self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + SPILL_MAGNITUDE)
+            # Immediately spread 50% of the spill to adjacent water cells so
+            # the inflow boundary doesn't become an isolated dead zone.
+            spill_at_source = SPILL_MAGNITUDE * 0.50
+            spill_to_nbrs   = SPILL_MAGNITUDE * 0.50
+            self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + spill_at_source)
+            neighbor_cells = list(self._cells_in_radius(r, c, 2))
+            water_nbrs = [(nr, nc, cell) for nr, nc, cell in neighbor_cells
+                          if cell.cell_type != CELL_INFLOW and (nr, nc) != (r, c)]
+            if water_nbrs:
+                share = spill_to_nbrs / len(water_nbrs)
+                for *_, ncell in water_nbrs:
+                    ncell.industrial = min(100.0, ncell.industrial + share)
+            else:
+                self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + spill_to_nbrs)
             self.contaminant_config["industrial_discharge"] = True
             self.contaminant_config["random_spills"] = True
             msg = f"⚠ Manual industrial spill at ({r},{c})!"
+            self._add_marker(r, c, "spill", "#ff9900", "Spill")
             self._log(msg)
             return msg
         elif event_type == "heavy_rain":
@@ -489,17 +519,24 @@ class GridEnvironment:
             self.drivers.storm_intensity = min(1.0, self.drivers.storm_intensity + 0.45)
             self.contaminant_config["nutrient_runoff"] = True
             self.contaminant_config["heavy_rain_events"] = True
+            inflows = [(r, c) for r in range(GRID_ROWS) for c in range(GRID_COLS)
+                       if self.grid[r][c].cell_type == CELL_INFLOW]
+            if inflows:
+                for ir, ic in inflows[:3]:
+                    self._add_marker(ir, ic, "rain", "#60a5fa", "Rain")
             msg = "🌧 Manual heavy rainfall triggered — nutrient runoff surge!"
             self._log(msg)
             return msg
         elif event_type == "heat_wave":
             self.drivers.temperature = min(35.0, self.drivers.temperature + 9.0)
+            self._add_marker(GRID_ROWS // 2, GRID_COLS // 2, "heat", "#f97316", "Heat")
             msg = f"🌡 Heat wave! Temperature raised to {self.drivers.temperature:.1f}°C."
             self._log(msg)
             return msg
         elif event_type == "drought":
             self.drivers.rainfall = max(0.0, self.drivers.rainfall - 0.3)
             self.drivers.storm_intensity = max(0.0, self.drivers.storm_intensity - 0.2)
+            self._add_marker(GRID_ROWS // 2, GRID_COLS // 2, "drought", "#f59e0b", "Drought")
             msg = "☀ Drought conditions — reduced inflow and runoff."
             self._log(msg)
             return msg
@@ -511,11 +548,83 @@ class GridEnvironment:
                     if self.grid[r][c].cell_type == CELL_INFLOW:
                         self.grid[r][c].nitrogen   = min(100.0, self.grid[r][c].nitrogen   + 25.0)
                         self.grid[r][c].phosphorus = min(100.0, self.grid[r][c].phosphorus + 18.0)
+                        self._add_marker(r, c, "fertilizer", "#4ade80", "Fert")
                         count += 1
             msg = f"🌱 Fertilizer runoff surge at {count} inflow cells!"
             self._log(msg)
             return msg
         return "Unknown event type"
+
+    def _natural_background_events(self) -> None:
+        """
+        Background ecological variability that occurs every tick regardless of
+        contaminant configuration.  These represent realistic lake dynamics:
+        precipitation, wind mixing, thermal fluctuation, and atmospheric deposition.
+        Only one major event fires per tick to keep the log readable.
+        """
+        season = self.drivers.season
+        t = self.drivers.timestep
+
+        # Atmospheric N/P deposition — tiny background nutrient loading every ~3 days
+        if t % 12 == 0:
+            for row in self.grid:
+                for cell in row:
+                    if cell.cell_type in (CELL_WATER, CELL_INFLOW, CELL_OUTFLOW):
+                        cell.nitrogen   = min(100.0, cell.nitrogen   + 0.015)
+                        cell.phosphorus = min(100.0, cell.phosphorus + 0.008)
+
+        # Pick at most one notable natural event this tick
+        roll = random.random()
+
+        if roll < 0.05:
+            # Spontaneous light rain event (all seasons)
+            boost = random.uniform(0.08, 0.28)
+            self.drivers.rainfall = min(1.0, self.drivers.rainfall + boost)
+            inflows = [(r, c) for r in range(GRID_ROWS) for c in range(GRID_COLS)
+                       if self.grid[r][c].cell_type == CELL_INFLOW]
+            if inflows:
+                r, c = random.choice(inflows)
+                self._add_marker(r, c, "nat_rain", "#93c5fd", "Rain")
+            self._log(f"🌦 Natural rainfall (+{boost:.0%}) — inflow levels rising.")
+
+        elif roll < 0.09 and season == 2:
+            # Summer warm spell
+            delta = random.uniform(0.8, 2.5)
+            self.drivers.temperature = min(35.0, self.drivers.temperature + delta)
+            self._add_marker(GRID_ROWS // 2, GRID_COLS // 2, "nat_heat", "#fb923c", "Warm")
+            self._log(f"☀ Warm spell — temperature +{delta:.1f}°C → {self.drivers.temperature:.1f}°C.")
+
+        elif roll < 0.13 and season in (0, 3):
+            # Winter/autumn cold front
+            delta = random.uniform(0.5, 2.0)
+            self.drivers.temperature = max(2.0, self.drivers.temperature - delta)
+            self._add_marker(GRID_ROWS // 2, GRID_COLS // 2, "nat_cold", "#bae6fd", "Cold")
+            self._log(f"❄ Cold front — temperature −{delta:.1f}°C → {self.drivers.temperature:.1f}°C.")
+
+        elif roll < 0.17:
+            # Wind-driven mixing event: brief flow boost across a mid-lake band
+            center_r = random.randint(GRID_ROWS // 4, 3 * GRID_ROWS // 4)
+            center_c = random.randint(GRID_COLS // 4, 3 * GRID_COLS // 4)
+            cells_mixed = 0
+            for r, c, cell in self._cells_in_radius(center_r, center_c, 4):
+                if cell.cell_type == CELL_WATER:
+                    cell.flow = min(1.0, cell.flow + random.uniform(0.04, 0.12))
+                    cell.dissolved_oxygen = min(100.0, cell.dissolved_oxygen + random.uniform(0.5, 1.5))
+                    cells_mixed += 1
+            if cells_mixed:
+                self._add_marker(center_r, center_c, "nat_wind", "#a3e635", "Wind")
+                self._log(f"💨 Wind mixing event at ({center_r},{center_c}) — DO and flow boosted.")
+
+        elif roll < 0.20 and season == 1:
+            # Spring algae seed flush — small N/P pulse from snowmelt at inflows
+            inflows = [(r, c) for r in range(GRID_ROWS) for c in range(GRID_COLS)
+                       if self.grid[r][c].cell_type == CELL_INFLOW]
+            if inflows:
+                r, c = random.choice(inflows)
+                self.grid[r][c].nitrogen   = min(100.0, self.grid[r][c].nitrogen   + random.uniform(2, 6))
+                self.grid[r][c].phosphorus = min(100.0, self.grid[r][c].phosphorus + random.uniform(1, 3))
+                self._add_marker(r, c, "nat_nutrient", "#86efac", "Melt")
+                self._log(f"🌱 Spring snowmelt nutrient pulse at inflow ({r},{c}).")
 
     def _random_events(self) -> None:
         """Generate stochastic environmental events each tick."""
@@ -532,14 +641,32 @@ class GridEnvironment:
                     r, c = random.choice(east_candidates)
                 else:
                     r, c = random.choice(spill_candidates)
-                self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + SPILL_MAGNITUDE)
+                # Split spill: 50% at source, 50% spread to nearby water cells.
+                spill_at_source = SPILL_MAGNITUDE * 0.50
+                spill_to_nbrs   = SPILL_MAGNITUDE * 0.50
+                self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + spill_at_source)
+                nbr_cells = [(nr, nc, cell)
+                             for nr, nc, cell in self._cells_in_radius(r, c, 2)
+                             if cell.cell_type != CELL_INFLOW and (nr, nc) != (r, c)]
+                if nbr_cells:
+                    share = spill_to_nbrs / len(nbr_cells)
+                    for *_, ncell in nbr_cells:
+                        ncell.industrial = min(100.0, ncell.industrial + share)
+                else:
+                    self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + spill_to_nbrs)
                 inflow_type = "east industrial" if c == GRID_COLS - 1 else ("north agricultural" if r == 0 else "west river")
+                self._add_marker(r, c, "spill", "#ff9900", "Spill")
                 self._log(f"⚠ Industrial spill at {inflow_type} inflow ({r},{c})!")
 
         # Heavy rainfall event
         if self.contaminant_config["heavy_rain_events"] and random.random() < HEAVY_RAIN_PROB:
             self.drivers.rainfall = min(1.0, self.drivers.rainfall + 0.4)
             self.drivers.storm_intensity = min(1.0, self.drivers.storm_intensity + 0.3)
+            inflows = [(r, c) for r in range(GRID_ROWS) for c in range(GRID_COLS)
+                       if self.grid[r][c].cell_type == CELL_INFLOW]
+            if inflows:
+                r, c = random.choice(inflows)
+                self._add_marker(r, c, "rain", "#60a5fa", "Rain")
             self._log("🌧 Heavy rainfall event — nutrient runoff surge!")
         else:
             # Rainfall slowly returns to baseline

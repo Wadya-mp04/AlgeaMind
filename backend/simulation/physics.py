@@ -47,9 +47,19 @@ def inflow_nutrients(
     grid: List[List[CellState]],
     contaminant_config: dict,
 ) -> None:
-    """Add runoff nutrients and sediment to inflow cells each tick."""
+    """Add runoff nutrients and sediment to inflow cells each tick.
+
+    Inflow cells represent flowing water entering the lake, not stagnant pools.
+    We push the majority of each nutrient load outward into adjacent water cells
+    so that contamination propagates into the lake rather than pooling at the
+    boundary — preventing artificial inflow dead-zones.
+    """
     if cell.cell_type != CELL_INFLOW:
         return
+
+    # Incoming fresh water replenishes DO at inflow cells — prevents them
+    # from becoming dead zones when industrial/algae stress is high.
+    cell.dissolved_oxygen = min(100.0, cell.dissolved_oxygen + 3.0 * (1.0 - cell.dissolved_oxygen / 100.0))
 
     rain   = drivers.rainfall
     storm  = drivers.storm_intensity
@@ -76,14 +86,16 @@ def inflow_nutrients(
     p_in_eff = p_in * intercept_factor
     s_in_eff = s_in * intercept_factor
 
-    cell.nitrogen   = min(100.0, cell.nitrogen   + n_in_eff)
-    cell.phosphorus = min(100.0, cell.phosphorus + p_in_eff)
-    cell.sediment   = min(100.0, cell.sediment   + s_in_eff)
+    # Only 35% of the load stays at the inflow cell itself — the rest is
+    # immediately pushed into the lake so inflow cells don't saturate.
+    inflow_retention = 0.35
+    cell.nitrogen   = min(100.0, cell.nitrogen   + n_in_eff * inflow_retention)
+    cell.phosphorus = min(100.0, cell.phosphorus + p_in_eff * inflow_retention)
+    cell.sediment   = min(100.0, cell.sediment   + s_in_eff * inflow_retention)
 
-    # Spread inflow loads into adjacent and second-ring water cells.
-    # Higher neighbor_fraction = more realistic nutrient plume from inflow.
-    neighbor_fraction = 0.50
-    second_ring_fraction = 0.20
+    # Spread the majority of the load into adjacent and second-ring water cells.
+    neighbor_fraction = 0.55
+    second_ring_fraction = 0.25
     rows_count = len(grid)
     cols_count = len(grid[0]) if rows_count else 0
 
@@ -341,12 +353,14 @@ def spread_industrial(grid: List[List[CellState]]) -> None:
     """
     Diffuse industrial pollution to neighbouring water cells.
     Biased towards outflow (south) to simulate downstream transport.
-    Spread rate is slower than algae (pollution is denser / settles).
+    Inflow cells use a higher spread rate so spills disperse into the lake
+    rather than staying pooled at the boundary and creating dead zones.
     """
     rows = len(grid)
     cols = len(grid[0]) if rows else 0
 
-    INDUSTRIAL_SPREAD_RATE = 0.06
+    INDUSTRIAL_SPREAD_RATE        = 0.06
+    INDUSTRIAL_SPREAD_RATE_INFLOW = 0.18  # faster dispersion from source cells
     SOUTH_BIAS   = 1.3
     NORTH_BIAS   = 0.9
     LATERAL_BIAS = 1.0
@@ -368,7 +382,9 @@ def spread_industrial(grid: List[List[CellState]]) -> None:
             if not water_nbrs:
                 continue
 
-            spread_out = INDUSTRIAL_SPREAD_RATE * cell.industrial * max(0.1, 1.0 - 0.3 * cell.flow)
+            rate = (INDUSTRIAL_SPREAD_RATE_INFLOW if cell.cell_type == CELL_INFLOW
+                    else INDUSTRIAL_SPREAD_RATE)
+            spread_out = rate * cell.industrial * max(0.1, 1.0 - 0.3 * cell.flow)
             weights = []
             for _nr, _nc, dr, dc in water_nbrs:
                 if dr == 1:
@@ -547,6 +563,29 @@ def tick_interventions(cell: CellState) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FLOW RELAXATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BASE_FLOW_WATER  = 0.30
+_BASE_FLOW_INFLOW = 0.60
+
+def relax_flow(cell: CellState) -> None:
+    """
+    Gradually return cell flow toward its natural baseline after an
+    aeration or circulation intervention expires.  Without this, repeated
+    interventions push the entire lake to max flow permanently.
+    """
+    if cell.cell_type == CELL_LAND:
+        return
+    base = _BASE_FLOW_INFLOW if cell.cell_type == CELL_INFLOW else _BASE_FLOW_WATER
+    # Active aeration (2) or circulation (3) holds flow elevated — skip decay.
+    if 2 in cell.active_interventions or 3 in cell.active_interventions:
+        return
+    if cell.flow > base:
+        cell.flow = max(base, cell.flow - 0.015)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ORCHESTRATED FULL-GRID STEP
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -574,6 +613,7 @@ def full_physics_step(
             decay_nutrients(cell)
             decay_sediment(cell, drivers.storm_intensity)
             decay_industrial(cell)
+            relax_flow(cell)
             cell.clamp()
 
     # Spread passes (two-buffer approach prevents race conditions)

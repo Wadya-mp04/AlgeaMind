@@ -1,6 +1,7 @@
 /**
  * AgentPanel — compact agent controls: mode selector, live toggle,
- * manual run buttons, last action display, RL stats, and research brief.
+ * manual run buttons, last action display, RL stats, research brief,
+ * and real-world HAB cost comparison.
  */
 import React, { useState } from "react";
 import {
@@ -8,6 +9,7 @@ import {
   Brain,
   ChevronDown,
   ChevronUp,
+  DollarSign,
   Loader2,
   PlayCircle,
   Radio,
@@ -33,6 +35,18 @@ interface AgentPanelProps {
   onSetAgentInterval:(v: number) => void;
 }
 
+interface CostReport {
+  summary: { total_cycles: number; total_cost_used: number; traditional_cost_estimate: number; cost_saved: number; percent_saved: number };
+  real_world_comparison?: {
+    agent_estimated_usd: number;
+    traditional_estimated_usd: number;
+    estimated_savings_usd: number;
+    breakdown_usd: Record<string, number>;
+    note: string;
+  };
+  action_breakdown: Record<string, { count: number; total_cost: number }>;
+}
+
 export const AgentPanel: React.FC<AgentPanelProps> = ({
   isAgentRunning,
   agentLive,
@@ -49,6 +63,21 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
 }) => {
   const [briefOpen,  setBriefOpen]  = useState(false);
   const [autoSteps,  setAutoSteps]  = useState(5);
+  const [costOpen,   setCostOpen]   = useState(false);
+  const [costReport, setCostReport] = useState<CostReport | null>(null);
+  const [costLoading, setCostLoading] = useState(false);
+
+  const loadCostReport = async () => {
+    if (costReport) { setCostOpen(p => !p); return; }
+    setCostLoading(true);
+    try {
+      const res = await fetch("/api/agent/cost_report");
+      if (res.ok) setCostReport(await res.json());
+    } finally {
+      setCostLoading(false);
+      setCostOpen(true);
+    }
+  };
 
   const actionMeta = lastAction
     ? ACTION_META.find(a => a.id === lastAction.action_id)
@@ -115,11 +144,8 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
               </div>
               <div className="w-full h-1 bg-[#0a1628] rounded-full overflow-hidden">
                 <div
-                  className="h-full rounded-full transition-all duration-300"
-                  style={{
-                    width: `${(1 - rlStats.epsilon / 0.4) * 100}%`,
-                    background: "linear-gradient(to right, #a855f7, #4a9eff)",
-                  }}
+                  className="h-full rounded-full transition-all duration-300 bg-purple-500"
+                  style={{ width: `${(1 - rlStats.epsilon / 0.4) * 100}%` }}
                 />
               </div>
             </div>
@@ -231,11 +257,103 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         </div>
       )}
 
+      {/* ── HAB Cost Comparison ───────────────────────────────────────────── */}
+      {agentLiveType === "llm" && (
+        <div className="bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-2.5">
+          <button
+            className="flex items-center justify-between w-full text-xs font-semibold text-gray-300"
+            onClick={loadCostReport}
+          >
+            <div className="flex items-center gap-1.5">
+              <DollarSign size={13} className="text-green-400" />
+              HAB Cost Comparison
+            </div>
+            {costLoading
+              ? <Loader2 size={12} className="animate-spin text-gray-500" />
+              : costOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />
+            }
+          </button>
+          {costOpen && costReport && (
+            <div className="mt-2 flex flex-col gap-2 text-xs">
+              {/* Simulated score summary */}
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                <span className="text-gray-500">Cycles run</span>
+                <span className="text-gray-300 font-mono">{costReport.summary.total_cycles}</span>
+                <span className="text-gray-500">Agent cost (sim)</span>
+                <span className="text-gray-300 font-mono">{costReport.summary.total_cost_used}</span>
+                <span className="text-gray-500">Reactive baseline</span>
+                <span className="text-gray-300 font-mono">{costReport.summary.traditional_cost_estimate}</span>
+                <span className="text-gray-500">Sim cost saved</span>
+                <span className={`font-mono font-semibold ${costReport.summary.cost_saved >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {costReport.summary.cost_saved >= 0 ? "+" : ""}{costReport.summary.cost_saved} ({costReport.summary.percent_saved.toFixed(0)}%)
+                </span>
+              </div>
+
+              {/* Real-world USD comparison */}
+              {costReport.real_world_comparison && (
+                <>
+                  <div className="border-t border-[#1a3050] pt-2">
+                    <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">Real-world equivalent (USD)</div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                      <span className="text-gray-500">Agent approach</span>
+                      <span className="text-green-300 font-mono">${costReport.real_world_comparison.agent_estimated_usd.toLocaleString()}</span>
+                      <span className="text-gray-500">Chemical-heavy baseline</span>
+                      <span className="text-gray-400 font-mono">${costReport.real_world_comparison.traditional_estimated_usd.toLocaleString()}</span>
+                      <span className="text-gray-500">Est. savings</span>
+                      <span className={`font-mono font-semibold ${costReport.real_world_comparison.estimated_savings_usd >= 0 ? "text-green-400" : "text-red-400"}`}>
+                        ${Math.abs(costReport.real_world_comparison.estimated_savings_usd).toLocaleString()}
+                        {costReport.real_world_comparison.estimated_savings_usd >= 0 ? " saved" : " over"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Benchmarks table */}
+                  <div className="border-t border-[#1a3050] pt-2">
+                    <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">Real-world benchmarks (ITRC HCB-1)</div>
+                    <div className="flex flex-col gap-0.5">
+                      <BenchRow label="Algaecide/alum" range="$500–$2,000/event" />
+                      <BenchRow label="Aeration (annual)" range="$11K–$50K/yr" />
+                      <BenchRow label="Biomanipulation" range="$300–$3,000/event" />
+                      <BenchRow label="Mechanical harvest" range="$400–$3,000/acre" />
+                      <BenchRow label="Constructed wetland" range="$5K–$25K/acre" />
+                      <BenchRow label="Nutrient management" range="$200–$1,500/season" />
+                    </div>
+                    <p className="text-[9px] text-gray-600 mt-1.5 leading-relaxed">
+                      USD 2020. Sources: ITRC HCB-1 C.2, EPA Nutrient Economics Report 2015, Wagner (2015).
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {/* Action breakdown */}
+              {Object.keys(costReport.action_breakdown).length > 0 && (
+                <div className="border-t border-[#1a3050] pt-2">
+                  <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Actions used</div>
+                  {Object.entries(costReport.action_breakdown).map(([name, d]) => (
+                    <div key={name} className="flex justify-between text-[10px] text-gray-400 py-0.5">
+                      <span className="truncate">{name}</span>
+                      <span className="font-mono text-gray-500 ml-2">×{d.count} (Σ{d.total_cost})</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
     </div>
   );
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
+
+const BenchRow: React.FC<{ label: string; range: string }> = ({ label, range }) => (
+  <div className="flex justify-between text-[10px]">
+    <span className="text-gray-500">{label}</span>
+    <span className="text-gray-400 font-mono">{range}</span>
+  </div>
+);
 
 const AgentTypeBtn: React.FC<{
   label:   string;

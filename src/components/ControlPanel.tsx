@@ -77,10 +77,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <div className="flex gap-2">
           <Tip text={isRunning ? "Pause the automatic simulation loop" : "Start running the simulation automatically (each tick = ~6 hours)"}>
             <button onClick={onPlay}
-                    className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded text-sm font-bold transition-colors ${
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded text-sm font-semibold transition-colors border ${
                       isRunning
-                        ? "bg-[#e05252]/20 border border-[#e05252]/50 text-[#e05252]"
-                        : "bg-[#2dba57]/15 border border-[#2dba57]/50 text-[#2dba57]"
+                        ? "border-[#e05252]/40 text-[#e05252] bg-transparent hover:bg-[#e05252]/10"
+                        : "border-[#2dba57]/40 text-[#2dba57] bg-transparent hover:bg-[#2dba57]/10"
                     }`}>
               {isRunning ? <Pause size={15} /> : <Play size={15} />}
               {isRunning ? "Pause" : "Play"}
@@ -312,12 +312,12 @@ const EventButton: React.FC<{
 }> = ({ icon, label, color, onClick, fullWidth }) => (
   <button
     onClick={onClick}
-    className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded text-xs font-semibold
-                border transition-all hover:brightness-125 active:scale-95 ${fullWidth ? "col-span-2" : ""}`}
+    className={`flex items-center justify-center gap-1.5 py-2 px-2 rounded text-xs font-medium
+                border transition-colors hover:bg-[#0a1628] ${fullWidth ? "col-span-2" : ""}`}
     style={{
       color,
-      borderColor: color + "55",
-      backgroundColor: color + "18",
+      borderColor: color + "40",
+      backgroundColor: "transparent",
     }}
   >
     {icon}

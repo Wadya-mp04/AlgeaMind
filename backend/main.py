@@ -39,9 +39,9 @@ from agent.rl_agent import RLAgent
 # ─────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="AlgaeMind Simulation API",
+    title="TrackAlgae Simulation API",
     description="2D grid simulation for Harmful Algal Bloom mitigation.",
-    version="1.1.0",
+    version="1.2.0",
 )
 
 app.add_middleware(
@@ -130,7 +130,7 @@ def health_check() -> Dict[str, str]:
 def root() -> Dict[str, str]:
     """Friendly root endpoint so opening backend URL does not return 404."""
     return {
-        "service": "AlgaeMind Simulation API",
+        "service": "TrackAlgae Simulation API",
         "status": "ok",
         "health": "/api/health",
         "docs": "/docs",

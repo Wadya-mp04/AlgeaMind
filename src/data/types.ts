@@ -68,6 +68,7 @@ export interface SimulationState {
   avg_phosphorus:    number;
   recent_events:     string[];
   recent_interventions: InterventionRecord[];
+  event_markers:     EventMarker[];
 }
 
 export interface InterventionRecord {
@@ -76,6 +77,15 @@ export interface InterventionRecord {
   action_name: string;
   row:         number;
   col:         number;
+}
+
+export interface EventMarker {
+  timestep: number;
+  row:      number;
+  col:      number;
+  kind:     string;
+  color:    string;
+  label:    string;
 }
 
 // ─── Agent types ─────────────────────────────────────────────────────────────

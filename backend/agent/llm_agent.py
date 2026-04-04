@@ -1,5 +1,5 @@
 """
-LLMAgent — Claude-powered environmental scientist agent for AlgaeMind.
+LLMAgent — Claude-powered environmental scientist agent for TrackAlgae.
 
 The agent receives a compact observation of the simulation state and returns
 a structured intervention decision with reasoning.  It also maintains a
@@ -15,66 +15,45 @@ from typing import Any, Dict, List, Optional
 import anthropic
 from dotenv import load_dotenv
 
-from config.constants import ACTION_NAMES, ACTION_DESCRIPTIONS, ACTION_COSTS, NUM_ACTIONS
+from config.constants import (
+    ACTION_NAMES, ACTION_DESCRIPTIONS, ACTION_COSTS, NUM_ACTIONS,
+    LAKE_AREA_M2, LAKE_AREA_ACRES,
+)
 
 load_dotenv()
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
-You are an expert environmental scientist and limnologist specialising in
-Harmful Algal Bloom (HAB) mitigation for freshwater lakes and reservoirs.
+You are a limnologist agent managing a 2D lake grid simulation.
+Cell variables: algae, nitrogen, phosphorus, dissolved_oxygen, industrial, biodiversity (all 0-100).
+Your goal: maximise long-term ecosystem health at minimum cost.
 
-You are operating as an autonomous decision-making agent in a 2D grid
-simulation of a eutrophying lake.  Each cell has:
-  algae (0-100), nitrogen, phosphorus, dissolved_oxygen, sediment,
-  industrial, biodiversity, flow, cell_type (0=water,2=inflow,3=outflow).
+Interventions (id | cost | notes):
+  0 Do Nothing           (0)  — use when health>70 and no dead zones
+  1 Reduce Nutrient Inflow (5 | 24t) — target inflow cells with high N/P
+  2 Aerate              (8 | 8t)  — ONLY for dead zones (DO≤5); expensive, treats symptoms not cause
+  3 Increase Circulation (6 | 16t) — mild DO/dilution boost
+  4 Mechanical Removal  (7 | instant) — removes 65% algae; good for localised severe blooms
+  5 Add Shading          (4 | 20t) — cheapest bloom suppression; prefer over aeration
+  6 Biological Control  (10 | 28t) — slow but sustainable; best once nutrients are managed
+  7 Chemical Treatment  (12 | instant) — LAST RESORT: 80% algae kill but adds toxicity and kills biodiversity
+  8 Mitigate Spill       (9 | instant) — required when industrial>30
+  9 Wetland Filtration  (11 | 32t) — best long-term nutrient control at inflows
 
-Global drivers: temperature (°C), rainfall (0-1), storm_intensity (0-1),
-                season (0-3), fertilizer_use (0-1).
+Decision hierarchy (stop at first matching condition):
+  1. industrial>30 at any cell → action 8 at that cell
+  2. dead zone (DO≤5) → action 2 (aerate), NOT shading
+  3. inflow N>50 or P>30 → action 1 or 9 at nearest inflow
+  4. bloom spreading (algae>35, multiple cells) → action 5 (shading), cheapest sustained
+  5. severe localised bloom (algae>65, ≤4 cells) → action 4 (mechanical)
+  6. health recovering, high nutrients remain → action 6 (bio-control) for long-term suppression
+  7. health>70, no blooms → action 0 (do nothing)
+  NEVER use action 7 unless actions 4 and 6 are already active AND DO is still crashing.
+  Avoid action 2 (aerate) unless DO≤5 — it's expensive and doesn't fix nutrient causes.
 
-Your goal is NOT simply to minimise algae.  You must optimise for long-term
-ecosystem health WHILE MINIMISING INTERVENTION COST.  Prioritise the most
-cost-effective action that addresses the most critical issue.  Avoid
-expensive interventions when cheaper alternatives work.
-
-Available interventions (action_id | cost | radius | duration):
-  0  Do Nothing              (cost:  0 | —      | —       ) — observe only
-  1  Reduce Nutrient Inflow  (cost:  5 | r=3    | 24 ticks) — blocks 60% runoff at inflow cells
-  2  Aerate Region           (cost:  8 | r=2    | 8 ticks ) — boosts DO immediately (+18)
-  3  Increase Circulation    (cost:  6 | r=3    | 16 ticks) — improves reaeration + dilution
-  4  Mechanical Algae Removal(cost:  7 | r=2    | instant ) — removes 65% algae directly
-  5  Add Shading             (cost:  4 | r=2    | 20 ticks) — limits photosynthesis (cheapest sustained)
-  6  Biological Control      (cost: 10 | r=3    | 28 ticks) — slow sustained algae reduction
-  7  Chemical Treatment      (cost: 12 | r=2    | instant ) — 80% algae kill + raises toxicity (EXPENSIVE)
-  8  Mitigate Industrial Spill(cost: 9 | r=2    | instant ) — removes 70% industrial pollution
-  9  Wetland Filtration      (cost: 11 | r=3    | 32 ticks) — filters inflow nutrients (long duration)
-
-Cost-efficiency rules:
-  1. If health > 70 and no dead zones: Do Nothing (cost 0) — conserve budget.
-  2. Dead zone (DO ≤ 5): Aerate (cost 8) — cheapest emergency fix.
-  3. Industrial spill (ind > 30): Mitigate Spill (cost 9) — must act quickly.
-  4. High inflow nutrients (N or P > 50): Reduce Inflow (cost 5) — prevents future blooms cheaply.
-  5. Active bloom spreading: Shading (cost 4) is cheapest sustained suppression.
-  6. Widespread severe bloom: Mechanical Removal (cost 7) before Chemical (cost 12).
-  7. NEVER use Chemical Treatment (cost 12) unless DO is crashing AND bloom is severe AND cheaper
-     alternatives are already active.
-
-Trade-offs to always consider:
-  - Chemical treatment is fast but raises industrial pollution and harms biodiversity.
-  - Aeration helps DO but does not address nutrient root causes.
-  - Biological control is slow (28 ticks) but the most sustainable once nutrients are managed.
-  - If nutrients are not controlled, blooms will return after any intervention.
-  - Real-world data (if provided) should be weighted heavily — it represents measured ground truth.
-
-You will respond ONLY with a valid JSON object — no prose, no markdown fences:
-{
-  "action_id":    <integer 0-9>,
-  "row":          <integer>,
-  "col":          <integer>,
-  "reasoning":    "<1-3 sentence scientific + cost justification>",
-  "brief_update": "<markdown bullet updating your running research brief>"
-}
+Respond ONLY with valid JSON (no markdown):
+{"action_id":<int>,"row":<int>,"col":<int>,"reasoning":"<1-2 sentences>","brief_update":"<bullet>"}
 """
 
 
@@ -126,7 +105,7 @@ class LLMAgent:
             try:
                 message = self.client.messages.create(
                     model=self.MODEL,
-                    max_tokens=512,
+                    max_tokens=256,
                     system=SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": prompt}],
                 )
@@ -175,57 +154,35 @@ class LLMAgent:
         season_str = season_names[int(drivers.get("season", 1))]
 
         lines = [
-            f"## Timestep {obs.get('timestep', '?')} | Season: {season_str}",
+            f"t={obs.get('timestep','?')} {season_str} | health={obs.get('global_health','?'):.0f} "
+            f"blooms={obs.get('bloom_cells','?')} hypoxic={obs.get('hypoxic_cells','?')} dead={obs.get('dead_zone_cells','?')}",
+            f"DO={obs.get('avg_do','?'):.1f} N={obs.get('avg_nitrogen','?'):.1f} P={obs.get('avg_phosphorus','?'):.1f} "
+            f"bio={obs.get('avg_biodiversity','?'):.1f} temp={drivers.get('temperature','?'):.1f}°C "
+            f"rain={drivers.get('rainfall','?'):.2f} fert={drivers.get('fertilizer_use','?'):.2f}",
             "",
-            "### Global Metrics",
-            f"  Global health:  {obs.get('global_health', '?')}/100",
-            f"  Bloom cells:    {obs.get('bloom_cells', '?')} | Hypoxic: {obs.get('hypoxic_cells', '?')} | Dead zones: {obs.get('dead_zone_cells', '?')}",
-            f"  Avg algae:      {obs.get('total_algae', '?'):.0f} total | Avg DO: {obs.get('avg_do', '?'):.1f} | Avg bio: {obs.get('avg_biodiversity', '?'):.1f}",
-            f"  Avg N:          {obs.get('avg_nitrogen', '?'):.1f} | Avg P: {obs.get('avg_phosphorus', '?'):.1f}",
-            "",
-            "### Environmental Drivers",
-            f"  Temp: {drivers.get('temperature', '?'):.1f}°C | Rainfall: {drivers.get('rainfall', '?'):.2f} | Storm: {drivers.get('storm_intensity', '?'):.2f} | Fertilizer: {drivers.get('fertilizer_use', '?'):.2f}",
-            "",
-            "### 12 Worst Cells",
+            "Worst cells (row,col health alg DO N P ind active):",
         ]
 
-        for cell in obs.get("worst_cells", [])[:12]:
-            active_names = [ACTION_NAMES.get(a, str(a)) for a in cell.get("active", [])]
-            active_str   = ", ".join(active_names) if active_names else "none"
+        for cell in obs.get("worst_cells", [])[:8]:
+            active_ids = cell.get("active", [])
+            active_str = ",".join(str(a) for a in active_ids) if active_ids else "-"
+            tp = "inflow" if cell["type"] == 2 else ("out" if cell["type"] == 3 else "w")
             lines.append(
-                f"  ({cell['row']:2d},{cell['col']:2d}) h={cell['health']:5.1f} "
-                f"alg={cell['algae']:4.1f} DO={cell['do']:4.1f} N={cell['n']:4.1f} "
-                f"P={cell['p']:4.1f} ind={cell['ind']:4.1f} bio={cell['bio']:4.1f} "
-                f"type={'inflow' if cell['type']==2 else 'water':6s} active=[{active_str}]"
+                f"  {cell['row']},{cell['col']} h={cell['health']:.0f} "
+                f"alg={cell['algae']:.0f} DO={cell['do']:.0f} N={cell['n']:.0f} "
+                f"P={cell['p']:.0f} ind={cell['ind']:.0f} [{tp}] act=[{active_str}]"
             )
 
-        lines += [
-            "",
-            "### Recent Events",
-        ]
-        for ev in obs.get("recent_events", [])[-5:]:
-            lines.append(f"  {ev}")
+        recent = obs.get("recent_events", [])[-3:]
+        if recent:
+            lines += ["", "Events: " + " | ".join(e.split("]")[-1].strip() for e in recent)]
 
-        # Include real-world sensor/satellite data if available
         ext = obs.get("external_data")
         if ext:
-            lines += [
-                "",
-                f"### Real-World Data Import ({ext.get('source', 'External')} — t={ext.get('timestep_imported', '?')})",
-                "  ⚡ These are MEASURED values from sensors/satellites — treat as ground truth.",
-            ]
-            for k, v in ext.get("observations", {}).items():
-                lines.append(f"  {k}: {v}")
-            lines.append(f"  {ext.get('note', '')}")
-            lines.append("  → Prioritise cost-efficient interventions that address the measured conditions above.")
+            lines += [f"External({ext.get('source','?')}): " +
+                      " ".join(f"{k}={v}" for k, v in ext.get("observations", {}).items())]
 
-        lines += [
-            "",
-            "### Your Running Research Brief",
-            self.research_brief[:self.MAX_BRIEF_CHARS],
-            "",
-            "Select the MOST COST-EFFICIENT intervention for this timestep. Return JSON only.",
-        ]
+        lines += ["", f"Brief: {self.research_brief[:1500]}", "", "Return JSON only."]
 
         return "\n".join(lines)
 
@@ -310,6 +267,53 @@ class LLMAgent:
             action_breakdown[name]["count"] += 1
             action_breakdown[name]["total_cost"] += entry["cost"]
 
+        # Count how many times each real-world-equivalent action was used
+        chem_uses = action_breakdown.get("Chemical Treatment", {}).get("count", 0)
+        aerate_uses = action_breakdown.get("Aerate Region", {}).get("count", 0)
+        bio_uses = action_breakdown.get("Biological Control", {}).get("count", 0)
+        shading_uses = action_breakdown.get("Add Shading", {}).get("count", 0)
+        mechanical_uses = action_breakdown.get("Mechanical Algae Removal", {}).get("count", 0)
+        wetland_uses = action_breakdown.get("Wetland Filtration", {}).get("count", 0)
+        nutrient_uses = action_breakdown.get("Reduce Nutrient Inflow", {}).get("count", 0)
+
+        # Real-world cost benchmarks (2020 USD, per treatment event / per ~0.5 acre area)
+        # Sources: ITRC HCB-1 C.2, EPA 2015 nutrient economics report, Solitude Lake Management
+        # Each simulated cell = CELL_AREA_M2 (50 m²) ≈ 0.012 acres
+        # Full lake = LAKE_AREA_M2 (28,000 m²) = LAKE_AREA_ACRES (~6.9 acres)
+        # Action radius covers ~13-28 cells ≈ 0.2-0.4 acres
+        REAL_WORLD_COSTS = {
+            "chemical_algaecide_per_event": {"low": 500, "mid": 933, "high": 2000,
+                "note": "Algaecide/alum per acre; ~$200-$800 per event at this scale (ITRC HCB-1)"},
+            "aeration_system_annual":       {"low": 11000, "high": 50000,
+                "note": "Aeration system install + annual ops; $11K-$50K/year (Wagner 2015)"},
+            "biomanipulation_per_event":    {"low": 300, "mid": 800, "high": 3000,
+                "note": "Biological control / zooplankton stocking per event"},
+            "mechanical_harvest_per_acre":  {"low": 400, "mid": 1200, "high": 3000,
+                "note": "Mechanical algae harvesting per acre per treatment"},
+            "constructed_wetland_capital":  {"low": 5000, "high": 25000,
+                "note": "Constructed wetland capital cost per acre of treatment area"},
+            "nutrient_mgmt_per_season":     {"low": 200, "mid": 600, "high": 1500,
+                "note": "Nutrient management / BMP implementation per season"},
+        }
+
+        # Estimate real-world equivalent cost for what the agent did this session
+        # Using mid-range values scaled to event count
+        rw_chem   = chem_uses      * REAL_WORLD_COSTS["chemical_algaecide_per_event"]["mid"]
+        rw_aerate = aerate_uses    * 150   # per-event cost of running aeration (fraction of annual)
+        rw_bio    = bio_uses       * REAL_WORLD_COSTS["biomanipulation_per_event"]["mid"]
+        rw_mech   = mechanical_uses * REAL_WORLD_COSTS["mechanical_harvest_per_acre"]["mid"] * 0.3
+        rw_wetland = wetland_uses  * 800   # annualised cost fraction per deployment
+        rw_shading = shading_uses  * 200   # shade curtain deployment per event
+        rw_nutrient = nutrient_uses * REAL_WORLD_COSTS["nutrient_mgmt_per_season"]["mid"]
+        rw_agent_total = rw_chem + rw_aerate + rw_bio + rw_mech + rw_wetland + rw_shading + rw_nutrient
+
+        # Traditional (chemical-heavy) baseline real-world equivalent
+        trad_event_count = max(1, self._cycle // 5)  # assume reactive treatment every ~5 ticks
+        rw_traditional = (trad_event_count *
+                          REAL_WORLD_COSTS["chemical_algaecide_per_event"]["mid"] +
+                          trad_event_count * 0.5 * 150)  # + frequent aeration
+        rw_saved = rw_traditional - rw_agent_total
+
         return {
             "summary": {
                 "total_cycles":              self._cycle,
@@ -319,10 +323,33 @@ class LLMAgent:
                 "percent_saved":             round(pct_saved, 1),
                 "avg_cost_per_cycle":        round(self.total_cost / self._cycle, 2) if self._cycle > 0 else 0.0,
             },
+            "real_world_comparison": {
+                "agent_estimated_usd":       round(rw_agent_total),
+                "traditional_estimated_usd": round(rw_traditional),
+                "estimated_savings_usd":     round(rw_saved),
+                "breakdown_usd": {
+                    "chemical_treatment":    round(rw_chem),
+                    "aeration":              round(rw_aerate),
+                    "biological_control":    round(rw_bio),
+                    "mechanical_removal":    round(rw_mech),
+                    "wetland_filtration":    round(rw_wetland),
+                    "shading":               round(rw_shading),
+                    "nutrient_management":   round(rw_nutrient),
+                },
+                "benchmarks":  REAL_WORLD_COSTS,
+                "note": (
+                    f"Lake area: {LAKE_AREA_ACRES} acres ({LAKE_AREA_M2:,} m²) — "
+                    "each grid cell = 50 m². "
+                    "Real-world costs in 2020 USD per treatment event. "
+                    "Sources: ITRC HCB-1 C.2, EPA Nutrient Economics Report 2015, Wagner (2015). "
+                    "USD estimates use mid-range benchmarks scaled to event count."
+                ),
+            },
             "comparison_note": (
-                "Traditional reactive strategy assumes: Chemical Treatment (12) per bloom event, "
-                "Aeration (8) per dead zone, Spill Mitigation (9) per industrial incident. "
-                "LLM agent selects the most cost-efficient alternative each cycle."
+                "Traditional reactive strategy assumes: Chemical Treatment per bloom event, "
+                "Aeration per dead zone, Spill Mitigation per industrial incident. "
+                "Agent selects most cost-efficient alternative each cycle, preferring "
+                "shading, bio-control, and nutrient reduction over expensive reactive treatments."
             ),
             "action_breakdown": action_breakdown,
             "ledger": self.cost_ledger,

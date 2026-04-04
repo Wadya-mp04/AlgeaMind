@@ -9,6 +9,14 @@ from typing import Final, Dict, List, Tuple
 GRID_ROWS: Final[int] = 20
 GRID_COLS: Final[int] = 28
 
+# ─── Real-world cell size ─────────────────────────────────────────────────────
+# 50 m²/cell gives a total lake area of ~28,000 m² ≈ 6.9 acres — a realistic
+# small lake footprint that aligns with HAB management literature (ITRC, EPA).
+# (25 m²/cell would yield only ~3.5 acres, closer to a pond.)
+CELL_AREA_M2:   Final[int]   = 50
+LAKE_AREA_M2:   Final[int]   = GRID_ROWS * GRID_COLS * CELL_AREA_M2   # 28,000 m²
+LAKE_AREA_ACRES: Final[float] = round(LAKE_AREA_M2 / 4046.86, 1)      # ≈ 6.9 acres
+
 # ─── Cell type codes ─────────────────────────────────────────────────────────
 CELL_WATER:   Final[int] = 0
 CELL_LAND:    Final[int] = 1
