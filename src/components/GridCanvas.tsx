@@ -54,6 +54,7 @@ interface GridCanvasProps {
   onCellClick:     (row: number, col: number) => void;
   tickCount:       number;
   containerWidth?: number;
+  containerHeight?: number;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -64,11 +65,13 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
   onCellClick,
   tickCount,
   containerWidth,
+  containerHeight,
 }) => {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const wrapperRef   = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState<{ row: number; col: number } | null>(null);
   const [wrapperW, setWrapperW] = useState<number>(CANVAS_W);
+  const [wrapperH, setWrapperH] = useState<number>(CANVAS_H);
 
   // Observe the wrapper's width for responsive scaling
   useEffect(() => {
@@ -77,15 +80,19 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
     const obs = new ResizeObserver(entries => {
       for (const entry of entries) {
         setWrapperW(entry.contentRect.width);
+        setWrapperH(entry.contentRect.height);
       }
     });
     obs.observe(el);
     setWrapperW(el.clientWidth);
+    setWrapperH(el.clientHeight);
     return () => obs.disconnect();
   }, []);
 
-  // Scale the canvas to fit the available width (never upscale beyond 1.0)
-  const scale = Math.min(1.0, (containerWidth ?? wrapperW) / CANVAS_W);
+  const displayW = Math.max(1, Math.round(containerWidth ?? wrapperW));
+  const displayH = Math.max(1, Math.round(containerHeight ?? wrapperH));
+  const scaleX = displayW / CANVAS_W;
+  const scaleY = displayH / CANVAS_H;
 
   // ── Draw helpers ─────────────────────────────────────────────────────────
 
@@ -268,6 +275,7 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
           }
         }
       }
+
     },
     [],
   );
@@ -318,9 +326,9 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
 
   const getCellFromEvent = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
-    // Divide by scale to map from displayed coords back to canvas coords
-    const col  = Math.floor((e.clientX - rect.left)  / (CELL_SIZE * scale));
-    const row  = Math.floor((e.clientY - rect.top)   / (CELL_SIZE * scale));
+    // Use independent X/Y scale to map display coords back to simulation grid.
+    const col  = Math.floor((e.clientX - rect.left)  / (CELL_SIZE * scaleX));
+    const row  = Math.floor((e.clientY - rect.top)   / (CELL_SIZE * scaleY));
     return { row, col };
   };
 
@@ -344,33 +352,28 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
     return state.grid[row][col];
   }, [hovered, state]);
 
-  const tooltipLeft = hovered ? hovered.col * CELL_SIZE + CELL_SIZE + 4 : 0;
-  const tooltipTop  = hovered ? hovered.row * CELL_SIZE : 0;
+  const tooltipLeft = hovered ? (hovered.col * CELL_SIZE + CELL_SIZE + 4) * scaleX : 0;
+  const tooltipTop  = hovered ? (hovered.row * CELL_SIZE) * scaleY : 0;
 
   const cellTypeName = (t: number) =>
     t === 0 ? "Water" : t === 1 ? "Land" : t === 2 ? "Inflow" : "Outflow";
 
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Scaled display dimensions
-  const displayW = Math.round(CANVAS_W * scale);
-  const displayH = Math.round(CANVAS_H * scale);
-
   return (
-    <div ref={wrapperRef} className="w-full select-none" style={{ maxWidth: CANVAS_W }}>
-      {/* Outer box sets the visible (scaled) size so layout respects it */}
-      <div className="relative" style={{ width: displayW, height: displayH }}>
+    <div ref={wrapperRef} className="w-full h-full select-none overflow-hidden">
+      {/* Bottom-anchored container keeps the sandbox snapped to panel sides and bottom. */}
+      <div className="relative h-full w-full overflow-hidden">
+        <div className="relative h-full w-full">
         <canvas
           ref={canvasRef}
           width={CANVAS_W}
           height={CANVAS_H}
           className="block cursor-crosshair"
           style={{
-            width:          displayW,
-            height:         displayH,
-            borderRadius:   6,
-            border:         "1px solid #1e3a5f",
-            boxShadow:      "0 0 0 1px #0d1b2e, 0 8px 32px rgba(0,0,0,0.6), 0 0 20px rgba(10,30,70,0.4)",
+            width:          "100%",
+            height:         "100%",
+            borderRadius:   0,
             imageRendering: "pixelated",
           }}
           onMouseMove={handleMouseMove}
@@ -384,8 +387,8 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
             className="absolute z-10 pointer-events-none bg-[#070f1d]/96 border border-[#1e3a5f]
                        rounded-lg px-2.5 py-2 text-xs text-gray-300 min-w-[172px] backdrop-blur-sm"
             style={{
-              left: (tooltipLeft * scale) > displayW - 200 ? (tooltipLeft * scale) - 200 : (tooltipLeft * scale),
-              top:  (tooltipTop  * scale) > displayH - 160 ? (tooltipTop  * scale) - 150 : (tooltipTop  * scale),
+              left: tooltipLeft > displayW - 200 ? tooltipLeft - 200 : tooltipLeft,
+              top:  tooltipTop  > displayH - 160 ? tooltipTop - 150 : tooltipTop,
               boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
             }}
           >
@@ -403,6 +406,7 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

@@ -41,6 +41,13 @@ export interface FlowConfig {
   outflow_south: boolean;
 }
 
+export interface ContaminantConfig {
+  nutrient_runoff: boolean;
+  industrial_discharge: boolean;
+  random_spills: boolean;
+  heavy_rain_events: boolean;
+}
+
 export type FlowPreset = "default" | "lake" | "river" | "reservoir";
 
 // ─── Simulation snapshot (full state returned by API) ─────────────────────────
@@ -48,6 +55,7 @@ export interface SimulationState {
   grid:              CellState[][];
   drivers:           GlobalDrivers;
   flow_config:       FlowConfig;
+  contaminant_config: ContaminantConfig;
   timestep:          number;
   global_health:     number;   // 0–100 composite score
   bloom_cells:       number;

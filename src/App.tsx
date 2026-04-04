@@ -58,6 +58,7 @@ export default function App() {
     applyAction,
     updateDrivers,
     updateFlows,
+    updateContaminants,
     applyFlowPreset,
     runAgentStep,
     runAgentAuto,
@@ -68,19 +69,90 @@ export default function App() {
   const [selectedAction, setSelectedAction] = useState(4);
   const tickRef       = useRef(0);
   const [tickCount,   setTickCount]   = useState(0);
+  const layoutRef     = useRef<HTMLDivElement>(null);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(260);
+  const [rightPanelWidth, setRightPanelWidth] = useState(320);
+  const [isResizing, setIsResizing] = useState<null | "left" | "right" | "center">(null);
+  const leftWidthRef = useRef(leftPanelWidth);
+  const rightWidthRef = useRef(rightPanelWidth);
   const centerRef     = useRef<HTMLDivElement>(null);
   const [centerWidth, setCenterWidth] = useState(0);
+  const [centerHeight, setCenterHeight] = useState(0);
+  const [mapHeight, setMapHeight] = useState(420);
+  const mapHeightRef = useRef(mapHeight);
+
+  useEffect(() => { leftWidthRef.current = leftPanelWidth; }, [leftPanelWidth]);
+  useEffect(() => { rightWidthRef.current = rightPanelWidth; }, [rightPanelWidth]);
+  useEffect(() => { mapHeightRef.current = mapHeight; }, [mapHeight]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const onMouseMove = (e: MouseEvent) => {
+      const wrap = layoutRef.current;
+      if (!wrap) return;
+      const rect = wrap.getBoundingClientRect();
+      const minCenter = 520;
+
+      if (isResizing === "left") {
+        const maxLeft = Math.max(220, rect.width - rightWidthRef.current - minCenter);
+        const next = Math.max(220, Math.min(maxLeft, e.clientX - rect.left));
+        setLeftPanelWidth(next);
+      } else if (isResizing === "right") {
+        const maxRight = Math.max(260, rect.width - leftWidthRef.current - minCenter);
+        const next = Math.max(260, Math.min(maxRight, rect.right - e.clientX));
+        setRightPanelWidth(next);
+      } else {
+        const centerRect = centerRef.current?.getBoundingClientRect();
+        if (!centerRect) return;
+        const minMap = 220;
+        const minBottom = 180;
+        const maxMap = Math.max(minMap, centerRect.height - minBottom - 12);
+        const next = Math.max(minMap, Math.min(maxMap, e.clientY - centerRect.top));
+        setMapHeight(next);
+      }
+    };
+
+    const onMouseUp = () => setIsResizing(null);
+
+    document.body.style.cursor = isResizing === "center" ? "row-resize" : "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+
+    return () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [isResizing, mapHeight]);
 
   useEffect(() => {
     const el = centerRef.current;
     if (!el) return;
     const obs = new ResizeObserver(entries => {
-      for (const e of entries) setCenterWidth(e.contentRect.width);
+      for (const e of entries) {
+        setCenterWidth(e.contentRect.width);
+        setCenterHeight(e.contentRect.height);
+      }
     });
     obs.observe(el);
     setCenterWidth(el.clientWidth);
+    setCenterHeight(el.clientHeight);
     return () => obs.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (centerHeight <= 0) return;
+    const minMap = 220;
+    const minBottom = 180;
+    const maxMap = Math.max(minMap, centerHeight - minBottom - 12);
+    const next = Math.max(minMap, Math.min(maxMap, mapHeightRef.current));
+    if (next !== mapHeightRef.current) {
+      setMapHeight(next);
+    }
+  }, [centerHeight]);
 
   useEffect(() => {
     const id = setInterval(() => { tickRef.current += 1; setTickCount(tickRef.current); }, 120);
@@ -105,6 +177,8 @@ export default function App() {
     healthVal >= 50 ? { label: "WARNING",  color: "#f0c040" } :
     healthVal >= 30 ? { label: "CRITICAL", color: "#e07830" } :
                       { label: "COLLAPSE", color: "#e03030" };
+
+  const mapCanvasHeight = Math.max(220, mapHeight - 108);
 
   return (
     <div className="flex flex-col h-screen bg-[#050d1a] text-white overflow-hidden"
@@ -184,10 +258,10 @@ export default function App() {
 
       {/* ── Main body (3-column) ──────────────────────────────────────────── */}
       <div className="flex-1 min-h-0 overflow-hidden p-2">
-        <div className="h-full grid grid-cols-[240px_minmax(0,1fr)_300px] xl:grid-cols-[260px_minmax(0,1fr)_320px] gap-2">
+        <div ref={layoutRef} className="h-full flex min-w-0">
 
           {/* ── Left: ControlPanel ─────────────────────────────────────────── */}
-          <aside className="min-h-0 overflow-y-auto">
+          <aside className="min-h-0 overflow-y-auto border-r border-[#1a3050] pr-2" style={{ width: leftPanelWidth }}>
             <ControlPanel
               state={state}
               isRunning={isRunning}
@@ -197,19 +271,32 @@ export default function App() {
               onReset={reset}
               onDriverChange={updateDrivers}
               onFlowChange={updateFlows}
+              onContaminantChange={updateContaminants}
               onFlowPreset={applyFlowPreset}
               onPlaybackSpeed={setPlaybackSpeed}
               onTriggerEvent={triggerEvent}
             />
           </aside>
 
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            onMouseDown={() => setIsResizing("left")}
+            className="w-2 flex-shrink-0 cursor-col-resize group"
+          >
+            <div className="h-full w-px mx-auto bg-[#1a3050] group-hover:bg-[#4a9eff] transition-colors" />
+          </div>
+
           {/* ── Center: map + action bar + stats below ─────────────────────── */}
-          <main ref={centerRef} className="min-h-0 flex flex-col gap-2 overflow-hidden">
+          <main ref={centerRef} className="min-h-0 flex-1 flex flex-col gap-2 overflow-hidden px-2">
 
             {/* Map card — constrained so StatsPanel is always visible */}
-            <div className="flex-shrink-0 rounded-lg border border-[#1a3050] bg-[#071224] p-2" style={{ maxHeight: "62%" }}>
+            <div
+              className="flex-shrink-0 rounded-lg border border-[#1a3050] bg-[#071224] flex flex-col min-h-0 overflow-hidden"
+              style={{ height: mapHeight }}
+            >
               {/* Map header row */}
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center justify-between px-2 pt-0 mb-0">
                 <span className="text-xs font-semibold text-gray-400">28×20 · ~50 m²/cell · click to intervene</span>
                 {/* Compact inline legend */}
                 <div className="flex flex-wrap justify-end gap-x-3 gap-y-0.5 text-[10px] text-gray-500">
@@ -223,16 +310,19 @@ export default function App() {
                 </div>
               </div>
 
-              <GridCanvas
-                state={state}
-                selectedAction={selectedAction}
-                onCellClick={handleCellClick}
-                tickCount={tickCount}
-                containerWidth={centerWidth > 0 ? centerWidth - 16 : undefined}
-              />
+              <div className="flex-1 min-h-0">
+                <GridCanvas
+                  state={state}
+                  selectedAction={selectedAction}
+                  onCellClick={handleCellClick}
+                  tickCount={tickCount}
+                  containerWidth={centerWidth > 0 ? centerWidth - 4 : undefined}
+                  containerHeight={mapCanvasHeight}
+                />
+              </div>
 
               {/* Intervention selector bar */}
-              <div className="mt-1.5 flex flex-wrap gap-1 items-center">
+              <div className="mt-1.5 px-2 pb-2 flex flex-wrap gap-1 items-center bg-[#071224]">
                 {ACTION_META.map(action => (
                   <Tooltip key={action.id}
                            text={`${action.description} | Cost: ${action.cost}${action.duration > 0 ? ` | ${action.duration}t (~${Math.round(action.duration * 6)}h)` : " | Instant"} | r=${action.radius}`}>
@@ -261,13 +351,31 @@ export default function App() {
             </div>
 
             {/* Stats panel below map */}
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              onMouseDown={() => setIsResizing("center")}
+              className="h-2 flex-shrink-0 cursor-row-resize group"
+            >
+              <div className="w-full h-px my-[3px] bg-[#1a3050] group-hover:bg-[#4a9eff] transition-colors" />
+            </div>
+
             <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-[#1e3a5f] bg-[#0d1b2e] p-2">
               <StatsPanel state={state} healthHistory={healthHistory} />
             </div>
           </main>
 
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            onMouseDown={() => setIsResizing("right")}
+            className="w-2 flex-shrink-0 cursor-col-resize group"
+          >
+            <div className="h-full w-px mx-auto bg-[#1a3050] group-hover:bg-[#4a9eff] transition-colors" />
+          </div>
+
           {/* ── Right: Agent + Logs ────────────────────────────────────────── */}
-          <aside className="min-h-0 flex flex-col gap-2 overflow-hidden">
+          <aside className="min-h-0 flex flex-col gap-2 overflow-hidden border-l border-[#1a3050] pl-2" style={{ width: rightPanelWidth }}>
             <div className="flex-shrink-0 overflow-y-auto max-h-[48%] bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-2">
               <AgentPanel
                 isAgentRunning={isAgentRunning}
@@ -298,51 +406,53 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Bottom metrics strip ─────────────────────────────────────────── */}
-      {state && (
-        <div className="flex-shrink-0 flex items-center border-t border-[#1a3050] bg-[#060e1c] px-3 py-1.5 overflow-x-auto gap-0">
-          <Activity size={13} className="text-[#4a9eff] mr-2 flex-shrink-0" />
-          <Tooltip text="Composite health (0–100): DO 30%, algae 35%, biodiversity 20%, nutrients 10%, industry 5%">
-            <MetricPill label="Health"       value={`${healthVal.toFixed(0)}/100`}               color={hColor} />
-          </Tooltip>
-          <Divider />
-          <Tooltip text="Average dissolved oxygen. Below 20 = hypoxic, below 5 = dead zone.">
-            <MetricPill label="Avg DO"       value={state.avg_do.toFixed(1)}                     color={state.avg_do < 20 ? "#e07830" : "#4a9eff"} />
-          </Tooltip>
-          <Divider />
-          <Tooltip text="Cells with algae ≥ 35. Blooms consume oxygen and can release toxins.">
-            <MetricPill label="Blooms"       value={`${state.bloom_cells}`}                       color={state.bloom_cells > 20 ? "#f0c040" : "#6b7280"} />
-          </Tooltip>
-          <Divider />
-          <Tooltip text="Cells with DO ≤ 20. Fish stress begins; invertebrates start dying.">
-            <MetricPill label="Hypoxic"      value={`${state.hypoxic_cells}`}                     color={state.hypoxic_cells > 10 ? "#e07830" : "#6b7280"} />
-          </Tooltip>
-          <Divider />
-          <Tooltip text="Cells with DO ≤ 5 — fully anoxic. No aerobic life survives.">
-            <MetricPill label="Dead zones"   value={`${state.dead_zone_cells}`}                   color={state.dead_zone_cells > 0 ? "#e03030" : "#6b7280"} />
-          </Tooltip>
-          <Divider />
-          <Tooltip text="Average nitrogen. High N (>45) fuels algae growth. Source: agricultural runoff.">
-            <MetricPill label="Avg N"        value={state.avg_nitrogen.toFixed(1)}                color={state.avg_nitrogen > 45 ? "#f0c040" : "#6b7280"} />
-          </Tooltip>
-          <Divider />
-          <Tooltip text="Average phosphorus — primary limiting nutrient in freshwater. High P (>25) triggers blooms.">
-            <MetricPill label="Avg P"        value={state.avg_phosphorus.toFixed(1)}              color={state.avg_phosphorus > 25 ? "#a78bfa" : "#6b7280"} />
-          </Tooltip>
-          <Divider />
-          <Tooltip text="Average biodiversity (0–100). Drops under hypoxia, bloom stress, or industrial pollution.">
-            <MetricPill label="Biodiversity" value={state.avg_biodiversity.toFixed(1)}            color={state.avg_biodiversity < 40 ? "#e07830" : "#2dba57"} />
-          </Tooltip>
-          <Divider />
-          <Tooltip text="Water temp °C. Above 15°C algae growth accelerates; above 27°C map shows heat shimmer.">
-            <MetricPill label="Temp"         value={`${state.drivers.temperature.toFixed(1)}°C`}  color="#f97316" />
-          </Tooltip>
-          <Divider />
-          <Tooltip text="Rainfall intensity. High values increase nutrient runoff at inflows.">
-            <MetricPill label="Rain"         value={`${(state.drivers.rainfall * 100).toFixed(0)}%`} color="#60a5fa" />
-          </Tooltip>
-        </div>
-      )}
+      {/* ── Footer (includes key metrics) ───────────────────────────────── */}
+      <footer className="flex-shrink-0 border-t border-[#1a3050] bg-[#060e1c]">
+        {state && (
+          <div className="flex flex-nowrap items-center whitespace-nowrap px-2 py-1 overflow-x-auto gap-0">
+            <Activity size={12} className="text-[#4a9eff] mr-1.5 flex-shrink-0" />
+            <Tooltip text="Composite health (0–100): DO 30%, algae 35%, biodiversity 20%, nutrients 10%, industry 5%">
+              <MetricPill label="Health"       value={`${healthVal.toFixed(0)}/100`}               color={hColor} />
+            </Tooltip>
+            <Divider />
+            <Tooltip text="Average dissolved oxygen. Below 20 = hypoxic, below 5 = dead zone.">
+              <MetricPill label="Avg DO"       value={state.avg_do.toFixed(1)}                     color={state.avg_do < 20 ? "#e07830" : "#4a9eff"} />
+            </Tooltip>
+            <Divider />
+            <Tooltip text="Cells with algae ≥ 35. Blooms consume oxygen and can release toxins.">
+              <MetricPill label="Blooms"       value={`${state.bloom_cells}`}                       color={state.bloom_cells > 20 ? "#f0c040" : "#6b7280"} />
+            </Tooltip>
+            <Divider />
+            <Tooltip text="Cells with DO ≤ 20. Fish stress begins; invertebrates start dying.">
+              <MetricPill label="Hypoxic"      value={`${state.hypoxic_cells}`}                     color={state.hypoxic_cells > 10 ? "#e07830" : "#6b7280"} />
+            </Tooltip>
+            <Divider />
+            <Tooltip text="Cells with DO ≤ 5 — fully anoxic. No aerobic life survives.">
+              <MetricPill label="Dead zones"   value={`${state.dead_zone_cells}`}                   color={state.dead_zone_cells > 0 ? "#e03030" : "#6b7280"} />
+            </Tooltip>
+            <Divider />
+            <Tooltip text="Average nitrogen. High N (>45) fuels algae growth. Source: agricultural runoff.">
+              <MetricPill label="Avg N"        value={state.avg_nitrogen.toFixed(1)}                color={state.avg_nitrogen > 45 ? "#f0c040" : "#6b7280"} />
+            </Tooltip>
+            <Divider />
+            <Tooltip text="Average phosphorus — primary limiting nutrient in freshwater. High P (>25) triggers blooms.">
+              <MetricPill label="Avg P"        value={state.avg_phosphorus.toFixed(1)}              color={state.avg_phosphorus > 25 ? "#a78bfa" : "#6b7280"} />
+            </Tooltip>
+            <Divider />
+            <Tooltip text="Average biodiversity (0–100). Drops under hypoxia, bloom stress, or industrial pollution.">
+              <MetricPill label="Biodiversity" value={state.avg_biodiversity.toFixed(1)}            color={state.avg_biodiversity < 40 ? "#e07830" : "#2dba57"} />
+            </Tooltip>
+            <Divider />
+            <Tooltip text="Water temp °C. Above 15°C algae growth accelerates; above 27°C map shows heat shimmer.">
+              <MetricPill label="Temp"         value={`${state.drivers.temperature.toFixed(1)}°C`}  color="#f97316" />
+            </Tooltip>
+            <Divider />
+            <Tooltip text="Rainfall intensity. High values increase nutrient runoff at inflows.">
+              <MetricPill label="Rain"         value={`${(state.drivers.rainfall * 100).toFixed(0)}%`} color="#60a5fa" />
+            </Tooltip>
+          </div>
+        )}
+      </footer>
 
       {error && (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2
@@ -388,12 +498,12 @@ const LegendItem: React.FC<{ color: string; label: string; tip: string }> = ({ c
 );
 
 const MetricPill: React.FC<{ label: string; value: string; color: string }> = ({ label, value, color }) => (
-  <div className="flex items-center gap-1.5 px-2 whitespace-nowrap cursor-help">
-    <span className="text-xs text-gray-500">{label}</span>
-    <span className="text-xs font-bold" style={{ color }}>{value}</span>
+  <div className="flex items-center gap-1 px-1.5 whitespace-nowrap cursor-help">
+    <span className="text-[10px] text-gray-500">{label}</span>
+    <span className="text-[10px] font-semibold" style={{ color }}>{value}</span>
   </div>
 );
 
 const Divider: React.FC = () => (
-  <span className="text-[#1a3050] text-sm select-none">│</span>
+  <span className="text-[#1a3050] text-xs select-none">|</span>
 );

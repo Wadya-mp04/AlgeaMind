@@ -86,6 +86,13 @@ class FlowConfigRequest(BaseModel):
     outflow_south: Optional[bool] = None
 
 
+class ContaminantConfigRequest(BaseModel):
+    nutrient_runoff:      Optional[bool] = None
+    industrial_discharge: Optional[bool] = None
+    random_spills:        Optional[bool] = None
+    heavy_rain_events:    Optional[bool] = None
+
+
 class AgentStepRequest(BaseModel):
     agent_type: Literal["heuristic", "llm", "rl"] = "heuristic"
 
@@ -117,6 +124,17 @@ class ExternalDataRequest(BaseModel):
 def health_check() -> Dict[str, str]:
     """Liveness probe for the frontend to confirm the backend is reachable."""
     return {"status": "ok", "timestep": str(env.drivers.timestep)}
+
+
+@app.get("/")
+def root() -> Dict[str, str]:
+    """Friendly root endpoint so opening backend URL does not return 404."""
+    return {
+        "service": "AlgaeMind Simulation API",
+        "status": "ok",
+        "health": "/api/health",
+        "docs": "/docs",
+    }
 
 
 @app.get("/api/state")
@@ -166,6 +184,14 @@ def update_flows(req: FlowConfigRequest) -> Dict[str, Any]:
     """Enable/disable inflow/outflow channels for scenario configuration."""
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     env.update_flow_config(**updates)
+    return env.get_state()
+
+
+@app.post("/api/contaminants")
+def update_contaminants(req: ContaminantConfigRequest) -> Dict[str, Any]:
+    """Enable/disable contaminant sources used by the simulation."""
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    env.update_contaminant_config(**updates)
     return env.get_state()
 
 

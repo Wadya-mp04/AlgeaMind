@@ -17,7 +17,7 @@ import {
   Thermometer,
   Zap,
 } from "lucide-react";
-import type { FlowConfig, FlowPreset, GlobalDrivers, SimulationState } from "../data/types";
+import type { ContaminantConfig, FlowConfig, FlowPreset, GlobalDrivers, SimulationState } from "../data/types";
 import type { EventType } from "../hooks/useSimulation";
 
 // ── Shared tooltip component ──────────────────────────────────────────────────
@@ -42,6 +42,7 @@ interface ControlPanelProps {
   onReset:           () => void;
   onDriverChange:    (partial: Partial<GlobalDrivers>) => void;
   onFlowChange:      (partial: Partial<FlowConfig>) => void;
+  onContaminantChange: (partial: Partial<ContaminantConfig>) => void;
   onFlowPreset:      (preset: FlowPreset) => void;
   onPlaybackSpeed:   (v: number) => void;
   onTriggerEvent?:   (eventType: EventType) => void;
@@ -58,12 +59,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onReset,
   onDriverChange,
   onFlowChange,
+  onContaminantChange,
   onFlowPreset,
   onPlaybackSpeed,
   onTriggerEvent,
 }) => {
   const d = state?.drivers;
   const f = state?.flow_config;
+  const c = state?.contaminant_config;
 
   return (
     <div className="flex flex-col gap-3 h-full">
@@ -91,7 +94,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               <SkipForward size={14} />
             </button>
           </Tip>
-          <Tip text="Reset the simulation to initial eutrophic conditions (elevated N/P, partial bloom)">
+          <Tip text="Reset to a clean baseline with no bloom and no active contaminant sources">
             <button onClick={onReset}
                     className="flex items-center justify-center gap-1 px-3 py-2 rounded text-xs
                                bg-[#0a1628] border border-[#1e3a5f] text-gray-400 hover:text-orange-400 transition-colors">
@@ -117,6 +120,40 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             <option value={32}>32× Ultra</option>
             <option value={64}>64× Max</option>
           </select>
+        </div>
+      </section>
+
+      {/* ── Contaminants ─────────────────────────────────────────────────── */}
+      <section className="bg-[#0d1b2e] border border-[#1e3a5f] rounded-lg p-3 flex-shrink-0">
+        <div className="flex items-center gap-2 mb-2">
+          <FlaskConical size={13} className="text-[#ff9900]" />
+          <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">Contaminants</span>
+          <Tip text="Environment starts clean. Enable one or more contaminant sources below to begin degradation.">
+            <Info size={12} className="text-gray-600 cursor-help" />
+          </Tip>
+        </div>
+        <div className="text-[11px] text-gray-500 mb-2">Pick contaminant sources to activate</div>
+        <div className="flex flex-col gap-1">
+          <FlowToggle
+            label="Nutrient runoff"
+            checked={c?.nutrient_runoff ?? false}
+            onChange={v => onContaminantChange({ nutrient_runoff: v })}
+          />
+          <FlowToggle
+            label="Industrial discharge"
+            checked={c?.industrial_discharge ?? false}
+            onChange={v => onContaminantChange({ industrial_discharge: v })}
+          />
+          <FlowToggle
+            label="Random industrial spills"
+            checked={c?.random_spills ?? false}
+            onChange={v => onContaminantChange({ random_spills: v })}
+          />
+          <FlowToggle
+            label="Random heavy rain events"
+            checked={c?.heavy_rain_events ?? false}
+            onChange={v => onContaminantChange({ heavy_rain_events: v })}
+          />
         </div>
       </section>
 

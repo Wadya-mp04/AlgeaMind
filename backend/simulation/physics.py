@@ -45,6 +45,7 @@ def inflow_nutrients(
     col: int,
     drivers: GlobalDrivers,
     grid: List[List[CellState]],
+    contaminant_config: dict,
 ) -> None:
     """Add runoff nutrients and sediment to inflow cells each tick."""
     if cell.cell_type != CELL_INFLOW:
@@ -56,9 +57,14 @@ def inflow_nutrients(
     amp    = rain * (1.0 + STORM_MULTIPLIER * storm)
 
     # Agricultural / river inflow: nutrients proportional to rainfall × fertilizer
-    n_in  = RAIN_N_INPUT  * amp * fert
-    p_in  = RAIN_P_INPUT  * amp * fert
-    s_in  = RAIN_SEDIMENT_INPUT * amp
+    if contaminant_config.get("nutrient_runoff", False):
+        n_in  = RAIN_N_INPUT  * amp * fert
+        p_in  = RAIN_P_INPUT  * amp * fert
+        s_in  = RAIN_SEDIMENT_INPUT * amp
+    else:
+        n_in = 0.0
+        p_in = 0.0
+        s_in = 0.0
 
     # Apply interception before the load is distributed so containment also
     # reduces leakage into neighboring water cells.
@@ -104,7 +110,7 @@ def inflow_nutrients(
                     nbr2.sediment   = min(100.0, nbr2.sediment   + s_in_eff * second_ring_fraction * 0.5)
 
     # East inflow: industrial discharge
-    if (row, col) in INFLOW_EAST_SET:
+    if contaminant_config.get("industrial_discharge", False) and (row, col) in INFLOW_EAST_SET:
         cell.industrial = min(100.0, cell.industrial + INDUSTRIAL_BASE_RATE)
 
 
@@ -273,9 +279,9 @@ def spread_algae(grid: List[List[CellState]]) -> None:
     cols = len(grid[0]) if rows else 0
 
     # Directional flow bias constants
-    # South (towards outflow at row 19) gets a higher weight
-    SOUTH_BIAS = 1.6   # weight for downward (southward) spread
-    NORTH_BIAS = 0.6   # weight for upward (away from outflow) spread
+    # Keep a southward tendency without collapsing spread into one direction.
+    SOUTH_BIAS = 1.3   # weight for downward (southward) spread
+    NORTH_BIAS = 0.9   # still allow meaningful upstream/back-diffusion
     LATERAL_BIAS = 1.0 # east/west spread unchanged
 
     # Buffers for delta values
@@ -341,8 +347,8 @@ def spread_industrial(grid: List[List[CellState]]) -> None:
     cols = len(grid[0]) if rows else 0
 
     INDUSTRIAL_SPREAD_RATE = 0.06
-    SOUTH_BIAS   = 1.7
-    NORTH_BIAS   = 0.5
+    SOUTH_BIAS   = 1.3
+    NORTH_BIAS   = 0.9
     LATERAL_BIAS = 1.0
 
     delta = [[0.0] * cols for _ in range(rows)]
@@ -384,6 +390,131 @@ def spread_industrial(grid: List[List[CellState]]) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 8c. RUNOFF NUTRIENT SPREAD (separate pass)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def spread_runoff_nutrients(
+    grid: List[List[CellState]],
+    contaminant_config: dict,
+) -> None:
+    """
+    Transport nutrient and sediment plumes downstream so runoff visibly spreads
+    from inflow channels into the wider lake each tick.
+    """
+    if not contaminant_config.get("nutrient_runoff", False):
+        return
+
+    rows = len(grid)
+    cols = len(grid[0]) if rows else 0
+
+    N_RATE = 0.07
+    P_RATE = 0.06
+    S_RATE = 0.08
+    SOUTH_BIAS = 1.15
+    NORTH_BIAS = 0.95
+    LATERAL_BIAS = 1.0
+    OUTFLOW_DRIFT = 0.18
+    FAR_FIELD_MIX = 0.015
+
+    delta_n = [[0.0] * cols for _ in range(rows)]
+    delta_p = [[0.0] * cols for _ in range(rows)]
+    delta_s = [[0.0] * cols for _ in range(rows)]
+
+    outflow_positions = [
+        (r, c)
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c].cell_type == CELL_OUTFLOW
+    ]
+
+    def min_outflow_dist(rr: int, cc: int) -> int:
+        if not outflow_positions:
+            return 0
+        return min(abs(rr - orow) + abs(cc - ocol) for orow, ocol in outflow_positions)
+
+    for r in range(rows):
+        for c in range(cols):
+            cell = grid[r][c]
+            if cell.cell_type == CELL_LAND:
+                continue
+
+            water_nbrs = []
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc].cell_type != CELL_LAND:
+                    water_nbrs.append((nr, nc, dr))
+
+            if not water_nbrs:
+                continue
+
+            # Faster cells advect more pollutant mass each tick, but keep
+            # transport modest so agents have time to intervene.
+            flow_boost = 0.35 + 0.65 * cell.flow
+            move_n = cell.nitrogen * N_RATE * flow_boost
+            move_p = cell.phosphorus * P_RATE * flow_boost
+            move_s = cell.sediment * S_RATE * flow_boost
+
+            src_outflow_dist = min_outflow_dist(r, c)
+
+            weights = []
+            for nr, nc, dr in water_nbrs:
+                if dr == 1:
+                    w = SOUTH_BIAS
+                elif dr == -1:
+                    w = NORTH_BIAS
+                else:
+                    w = LATERAL_BIAS
+
+                # Mild directional pull toward outflow cells.
+                nbr_outflow_dist = min_outflow_dist(nr, nc)
+                if nbr_outflow_dist < src_outflow_dist:
+                    w *= (1.0 + OUTFLOW_DRIFT)
+                elif nbr_outflow_dist > src_outflow_dist:
+                    w *= (1.0 - OUTFLOW_DRIFT * 0.45)
+                weights.append(w)
+            total_weight = sum(weights)
+
+            delta_n[r][c] -= move_n
+            delta_p[r][c] -= move_p
+            delta_s[r][c] -= move_s
+
+            for (nr, nc, _dr), w in zip(water_nbrs, weights):
+                share = w / total_weight
+                delta_n[nr][nc] += move_n * share
+                delta_p[nr][nc] += move_p * share
+                delta_s[nr][nc] += move_s * share
+
+    # Basin-scale conservative mixing so contamination slowly reaches the full
+    # sandbox without unrealistically appearing everywhere at once.
+    water_positions = [
+        (r, c)
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c].cell_type != CELL_LAND
+    ]
+
+    if water_positions:
+        avg_n = sum(grid[r][c].nitrogen for r, c in water_positions) / len(water_positions)
+        avg_p = sum(grid[r][c].phosphorus for r, c in water_positions) / len(water_positions)
+        avg_s = sum(grid[r][c].sediment for r, c in water_positions) / len(water_positions)
+        for r, c in water_positions:
+            cell = grid[r][c]
+            mix = FAR_FIELD_MIX * (0.8 + 0.4 * cell.flow)
+            delta_n[r][c] += (avg_n - cell.nitrogen) * mix
+            delta_p[r][c] += (avg_p - cell.phosphorus) * mix
+            delta_s[r][c] += (avg_s - cell.sediment) * mix
+
+    for r in range(rows):
+        for c in range(cols):
+            cell = grid[r][c]
+            if cell.cell_type == CELL_LAND:
+                continue
+            cell.nitrogen = max(0.0, min(100.0, cell.nitrogen + delta_n[r][c]))
+            cell.phosphorus = max(0.0, min(100.0, cell.phosphorus + delta_p[r][c]))
+            cell.sediment = max(0.0, min(100.0, cell.sediment + delta_s[r][c]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 9. INTERVENTION TIMERS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -422,6 +553,7 @@ def tick_interventions(cell: CellState) -> None:
 def full_physics_step(
     grid: List[List[CellState]],
     drivers: GlobalDrivers,
+    contaminant_config: dict,
 ) -> None:
     """
     Apply all physics rules to the entire grid for one timestep.
@@ -435,7 +567,7 @@ def full_physics_step(
             cell = grid[r][c]
             if cell.cell_type == CELL_LAND:
                 continue
-            inflow_nutrients(cell, r, c, drivers, grid)
+            inflow_nutrients(cell, r, c, drivers, grid, contaminant_config)
             grow_algae(cell, drivers)
             update_oxygen(cell)
             update_biodiversity(cell)
@@ -445,6 +577,7 @@ def full_physics_step(
             cell.clamp()
 
     # Spread passes (two-buffer approach prevents race conditions)
+    spread_runoff_nutrients(grid, contaminant_config)
     spread_algae(grid)
     spread_industrial(grid)
 

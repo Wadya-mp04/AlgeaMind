@@ -47,6 +47,12 @@ class GridEnvironment:
 
     def __init__(self) -> None:
         self.drivers = GlobalDrivers()
+        self.contaminant_config: Dict[str, bool] = {
+            "nutrient_runoff": False,
+            "industrial_discharge": False,
+            "random_spills": False,
+            "heavy_rain_events": False,
+        }
         self.flow_config: Dict[str, bool] = {
             "inflow_north": True,
             "inflow_west": True,
@@ -66,21 +72,29 @@ class GridEnvironment:
     # ─────────────────────────────────────────────────────────────────────────
 
     def reset(self) -> None:
-        """Restore initial eutrophic (pre-bloom pressure) state."""
+        """Restore clean baseline state with contaminants disabled."""
         self.drivers = GlobalDrivers(
             temperature=18.0, rainfall=0.20,
             storm_intensity=0.0, season=1,
             fertilizer_use=0.35, timestep=0,
         )
+        self.contaminant_config = {
+            "nutrient_runoff": False,
+            "industrial_discharge": False,
+            "random_spills": False,
+            "heavy_rain_events": False,
+        }
         self.grid = self._build_grid()
-        self._recent_events = ["Simulation initialised — eutrophic conditions detected."]
+        self._recent_events = [
+            "Simulation initialised — clean baseline (no contaminants active)."
+        ]
         self._recent_interventions = []
         self._health_history = []
         self._season_tick_counter = 0
 
     def step(self) -> None:
         """Advance the simulation by one tick."""
-        full_physics_step(self.grid, self.drivers)
+        full_physics_step(self.grid, self.drivers, self.contaminant_config)
         self._random_events()
         self._season_tick_counter += 1
         if self._season_tick_counter >= 120:
@@ -136,6 +150,29 @@ class GridEnvironment:
             f"S-out:{int(self.flow_config['outflow_south'])})."
         )
 
+    def update_contaminant_config(self, **kwargs) -> None:
+        """Enable/disable contaminant sources that drive water degradation."""
+        for key, value in kwargs.items():
+            if key in self.contaminant_config and value is not None:
+                self.contaminant_config[key] = bool(value)
+
+        # Keep drivers aligned with contaminant toggles.
+        if not self.contaminant_config["nutrient_runoff"]:
+            self.drivers.rainfall = 0.0
+            self.drivers.storm_intensity = 0.0
+            self.drivers.fertilizer_use = 0.0
+        elif self.drivers.rainfall == 0.0 and self.drivers.fertilizer_use == 0.0:
+            self.drivers.rainfall = 0.20
+            self.drivers.fertilizer_use = 0.35
+
+        self._log(
+            "Contaminants updated "
+            f"(runoff:{int(self.contaminant_config['nutrient_runoff'])} "
+            f"industrial:{int(self.contaminant_config['industrial_discharge'])} "
+            f"spills:{int(self.contaminant_config['random_spills'])} "
+            f"rain-events:{int(self.contaminant_config['heavy_rain_events'])})."
+        )
+
     def get_state(self) -> Dict[str, Any]:
         """Return full serialisable state snapshot for the API."""
         water_cells = [
@@ -165,6 +202,7 @@ class GridEnvironment:
             "grid":                  grid_serial,
             "drivers":               self.drivers.to_dict(),
             "flow_config":           dict(self.flow_config),
+            "contaminant_config":    dict(self.contaminant_config),
             "timestep":              self.drivers.timestep,
             "global_health":         round(global_health, 2),
             "bloom_cells":           bloom_cells,
@@ -226,7 +264,7 @@ class GridEnvironment:
         - INFLOW_WEST  (rows 5-9, col 0)  → INFLOW (river)
         - INFLOW_EAST  (rows 10-14, col 27) → INFLOW (industrial)
         - OUTFLOW_SOUTH (row 19, cols 11-16) → OUTFLOW
-        - All interior cells → WATER with mild eutrophic conditions
+        - All interior cells → clean water baseline (no bloom)
         """
         inflow_n_set, inflow_w_set, inflow_e_set, outflow_set = self._active_flow_sets()
 
@@ -247,23 +285,34 @@ class GridEnvironment:
                 elif r == 0 or r == GRID_ROWS - 1 or c == 0 or c == GRID_COLS - 1:
                     cell = CellState.make_land()
                 else:
-                    # Interior water: active eutrophic + early bloom conditions
-                    # Algae is highest near north (agricultural) inflow,
-                    # reduced toward south.  Start with some cells already blooming
-                    # so the demo opens in a visible crisis state.
-                    dist_from_north = r / GRID_ROWS
-                    base_algae  = 18.0 + rng.uniform(0, 18) + (1 - dist_from_north) * 18
-                    base_n      = 20.0 + rng.uniform(-5, 12)
-                    base_p      = 12.0 + rng.uniform(-3, 8)
+                    # Interior water starts healthy; contamination appears only
+                    # after user-selected contaminant sources are enabled.
+                    base_algae = 1.0 + rng.uniform(0.0, 1.2)
+                    base_n = 4.5 + rng.uniform(-1.0, 1.0)
+                    base_p = 2.2 + rng.uniform(-0.6, 0.8)
                     cell = CellState.make_water(
                         nitrogen=base_n,
                         phosphorus=base_p,
-                        algae=min(80.0, base_algae),
+                        algae=base_algae,
                     )
-                    # Reduce DO in proportion to bloom severity
-                    cell.dissolved_oxygen -= base_algae * 0.40
-                    cell.dissolved_oxygen = max(30.0, cell.dissolved_oxygen)
-                    cell.biodiversity     = max(20.0, 78.0 - base_algae * 0.7)
+
+                # Enforce clean baseline profiles for flow edge cells too.
+                if cell.cell_type == CELL_INFLOW:
+                    cell.algae = 1.5
+                    cell.nitrogen = 5.0
+                    cell.phosphorus = 2.5
+                    cell.sediment = 2.0
+                    cell.industrial = 0.0
+                    cell.dissolved_oxygen = 84.0
+                    cell.biodiversity = 82.0
+                elif cell.cell_type == CELL_OUTFLOW:
+                    cell.algae = 1.0
+                    cell.nitrogen = 4.0
+                    cell.phosphorus = 2.0
+                    cell.sediment = 1.5
+                    cell.industrial = 0.0
+                    cell.dissolved_oxygen = 86.0
+                    cell.biodiversity = 84.0
                 row.append(cell)
             grid.append(row)
         return grid
@@ -423,19 +472,23 @@ class GridEnvironment:
             ]
             if not spill_candidates:
                 return "No active inflow cells for spill"
-            # Bias 60% chance towards east inflow (industrial zone)
+            # Mild east preference, but still frequently hit other inflows.
             east = [(r, c) for r, c in spill_candidates if c == GRID_COLS - 1]
-            if east and random.random() < 0.6:
+            if east and random.random() < 0.40:
                 r, c = random.choice(east)
             else:
                 r, c = random.choice(spill_candidates)
             self.grid[r][c].industrial = min(100.0, self.grid[r][c].industrial + SPILL_MAGNITUDE)
+            self.contaminant_config["industrial_discharge"] = True
+            self.contaminant_config["random_spills"] = True
             msg = f"⚠ Manual industrial spill at ({r},{c})!"
             self._log(msg)
             return msg
         elif event_type == "heavy_rain":
             self.drivers.rainfall = min(1.0, self.drivers.rainfall + 0.55)
             self.drivers.storm_intensity = min(1.0, self.drivers.storm_intensity + 0.45)
+            self.contaminant_config["nutrient_runoff"] = True
+            self.contaminant_config["heavy_rain_events"] = True
             msg = "🌧 Manual heavy rainfall triggered — nutrient runoff surge!"
             self._log(msg)
             return msg
@@ -451,6 +504,7 @@ class GridEnvironment:
             self._log(msg)
             return msg
         elif event_type == "fertilizer_runoff":
+            self.contaminant_config["nutrient_runoff"] = True
             count = 0
             for r in range(GRID_ROWS):
                 for c in range(GRID_COLS):
@@ -466,15 +520,15 @@ class GridEnvironment:
     def _random_events(self) -> None:
         """Generate stochastic environmental events each tick."""
         # Industrial spill — can now happen at ANY active inflow, not just east
-        if random.random() < SPILL_PROB:
+        if self.contaminant_config["random_spills"] and random.random() < SPILL_PROB:
             spill_candidates = [
                 (r, c) for r in range(GRID_ROWS) for c in range(GRID_COLS)
                 if self.grid[r][c].cell_type == CELL_INFLOW
             ]
             if spill_candidates:
-                # 65% chance at east (industrial) inflow, 35% at any other inflow
+                # Mild east preference, but random spills still occur on north/west inflows.
                 east_candidates = [(r, c) for r, c in spill_candidates if c == GRID_COLS - 1]
-                if east_candidates and random.random() < 0.65:
+                if east_candidates and random.random() < 0.40:
                     r, c = random.choice(east_candidates)
                 else:
                     r, c = random.choice(spill_candidates)
@@ -483,13 +537,14 @@ class GridEnvironment:
                 self._log(f"⚠ Industrial spill at {inflow_type} inflow ({r},{c})!")
 
         # Heavy rainfall event
-        if random.random() < HEAVY_RAIN_PROB:
+        if self.contaminant_config["heavy_rain_events"] and random.random() < HEAVY_RAIN_PROB:
             self.drivers.rainfall = min(1.0, self.drivers.rainfall + 0.4)
             self.drivers.storm_intensity = min(1.0, self.drivers.storm_intensity + 0.3)
             self._log("🌧 Heavy rainfall event — nutrient runoff surge!")
         else:
             # Rainfall slowly returns to baseline
-            self.drivers.rainfall = max(0.05, self.drivers.rainfall * 0.97)
+            floor = 0.05 if self.contaminant_config["nutrient_runoff"] else 0.0
+            self.drivers.rainfall = max(floor, self.drivers.rainfall * 0.97)
             self.drivers.storm_intensity = max(0.0, self.drivers.storm_intensity * 0.90)
 
     # ─────────────────────────────────────────────────────────────────────────

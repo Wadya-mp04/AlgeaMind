@@ -10,6 +10,7 @@ import { FLOW_PRESETS } from "../data/types";
 import type {
   AgentAction,
   AgentStepResult,
+  ContaminantConfig,
   FlowConfig,
   FlowPreset,
   GlobalDrivers,
@@ -85,6 +86,7 @@ export interface UseSimulationReturn {
   applyAction:     (actionId: number, row: number, col: number) => Promise<void>;
   updateDrivers:   (partial: Partial<GlobalDrivers>) => Promise<void>;
   updateFlows:     (partial: Partial<FlowConfig>) => Promise<void>;
+  updateContaminants: (partial: Partial<ContaminantConfig>) => Promise<void>;
   applyFlowPreset: (preset: FlowPreset) => Promise<void>;
   runAgentStep:      (agentType: AgentType) => Promise<void>;
   runAgentAuto:      (agentType: AgentType, n?: number) => Promise<void>;
@@ -310,6 +312,17 @@ export function useSimulation(): UseSimulationReturn {
     }
   }, []);
 
+  // ── Update contaminant source toggles ───────────────────────────────────
+  const updateContaminants = useCallback(async (partial: Partial<ContaminantConfig>) => {
+    try {
+      const data = await apiPost<SimulationState>("/api/contaminants", partial);
+      setState(data);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   // ── Manual single agent step ──────────────────────────────────────────────
   const runAgentStep = useCallback(async (agentType: AgentType) => {
     await _doAgentStep(agentType);
@@ -410,6 +423,7 @@ export function useSimulation(): UseSimulationReturn {
     applyAction,
     updateDrivers,
     updateFlows,
+    updateContaminants,
     applyFlowPreset,
     runAgentStep,
     runAgentAuto,
