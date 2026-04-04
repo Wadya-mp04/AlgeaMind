@@ -374,7 +374,7 @@ export default function App() {
               </>
             ) : (
               <div className="flex-1 min-h-0 rounded-lg border border-[#1e3a5f] bg-[#0d1b2e] overflow-hidden">
-                <Dashboard state={state} healthHistory={healthHistory} />
+                <Dashboard state={state} healthHistory={healthHistory} agentType={agentLiveType} />
               </div>
             )}
           </main>
